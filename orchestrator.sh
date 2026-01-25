@@ -135,25 +135,35 @@ run_agent() {
     # Log completion
     log_agent "$agent_name" "COMPLETE"
 }
-
 build_agent_context() {
     local agent_name=$1
     local directive=$2
 
     cat << CONTEXT
-# CRITICAL OPERATING INSTRUCTIONS
-You are operating in TEXT-ONLY mode. Do NOT use any tools (Read, Bash, Task, Grep, etc.).
-Instead, produce your response as structured text with markers like:
-- [TASK]description[/TASK] for tasks
-- [MSG:agent_name]content[/MSG] for messages
-- [SPAWN]specialization:task[/SPAWN] for spawn requests (Weaver/Djinn only)
-- [ARTIFACT:path]content[/ARTIFACT] for artifacts
-- [COMPLETE] when done
+# OPERATING MODE: FULLY AUTONOMOUS
 
-Respond with ANALYSIS AND PLANNING ONLY. Do not attempt to execute commands or read files.
+You have full tool access. Use Read, Write, Bash, Grep, Glob, Task - whatever you need.
+Execute real commands. Create real files. Make real changes.
+
+When you need to communicate with other agents or signal state changes, ALSO emit markers:
+- [TASK]description[/TASK] - register a task on the board
+- [MSG:agent_name]content[/MSG] - async message to another agent
+- [SPAWN]specialization:task[/SPAWN] - request subagent (Weaver/Djinn only)
+- [ARTIFACT:path]description[/ARTIFACT] - register an artifact you created
+- [COMPLETE] - signal your phase is done
+
+These markers are for orchestration. They don't replace actual work - do the work FIRST, then emit markers to record what you did.
 
 # DIRECTIVE
 $directive
+
+# PROJECT ROOT
+$PANTHEON_ROOT
+
+# WORKING DIRECTORIES
+- Source: $PANTHEON_ROOT/../src (or as defined in project brief)
+- Output: $PANTHEON_ROOT/output
+- State: $PANTHEON_ROOT/state
 
 # CURRENT STATE
 $(cat "$PANTHEON_ROOT/state/project_state.md" 2>/dev/null || echo "No project state yet.")
@@ -164,11 +174,11 @@ $(cat "$PANTHEON_ROOT/state/task_board.json")
 # MESSAGES FOR YOU
 $(get_messages_for "$agent_name")
 
-# ARTIFACTS
+# ARTIFACTS REGISTRY
 $(cat "$PANTHEON_ROOT/state/artifacts.json")
 
-# YOUR PREVIOUS OUTPUT
-$(cat "$PANTHEON_ROOT/state/response_${agent_name}.md" 2>/dev/null || echo "First cycle.")
+# YOUR PREVIOUS OUTPUT (for continuity)
+$(tail -100 "$PANTHEON_ROOT/state/response_${agent_name}.md" 2>/dev/null || echo "First cycle.")
 
 CONTEXT
 }
