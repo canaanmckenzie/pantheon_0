@@ -213,7 +213,7 @@ File contents
 The Weaver and Djinn can spawn these specialist workers:
 
 | Specialization | Focus Area |
-|---------------|------------|
+| --------------- | ------------ |
 | `frontend` | UI, components, styling |
 | `backend` | APIs, server logic |
 | `database` | Schema, queries, migrations |
@@ -254,7 +254,9 @@ Cycles repeat until LUMINARY declares `[COMPLETE]` or max cycles reached.
 ### Custom State
 
 Use the Crocodile's memory system:
+
 ```bash
+
 source lib/state.sh
 remember "key" "value"
 recall "key"
@@ -271,10 +273,9 @@ recall "key"
 
 - Run `./pantheon.sh clean` to reset
 - Check `state/checkpoints/` for restore points
+
 ### Spawned agents failing
 
-- Check `spawn/*/response.md` for outputs
-- Increase timeout in `lib/spawner.sh`
 - Check `spawn/*/response.md` for outputs
 - Increase timeout in `lib/spawner.sh`
 

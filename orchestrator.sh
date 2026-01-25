@@ -440,13 +440,33 @@ run_agent() {
         model_flag="--model $PANTHEON_MODEL"
     fi
 
-    timeout "${PANTHEON_TIMEOUT:-300}" claude --dangerously-skip-permissions --print $model_flag \
+    # Increased timeout to 10 minutes - agents need time for complex autonomous work
+    local exit_code=0
+    timeout "${PANTHEON_TIMEOUT:-600}" claude --dangerously-skip-permissions --print $model_flag \
         --system-prompt "$(cat "$PANTHEON_ROOT/agents/${agent_name}.md")" \
-        < "$context_file" > "$response_file" 2>/dev/null || true
-    
+        < "$context_file" > "$response_file" 2>/dev/null || exit_code=$?
+
+    # Check if timeout occurred (exit code 124)
+    if [[ $exit_code -eq 124 ]]; then
+        log_warning "Agent $agent_name timed out after ${PANTHEON_TIMEOUT:-600}s"
+    fi
+
+    # Check for rate limit in response
+    if grep -qiE "hit your limit|rate limit|resets at|too many requests" "$response_file" 2>/dev/null; then
+        log_error "Rate limit detected in $agent_name response"
+        echo "RATE_LIMITED" > "$PANTHEON_ROOT/state/rate_limit.flag"
+        return 1
+    fi
+
+    # Check for empty or very short response (sign of rate limiting or error)
+    local response_size=$(wc -c < "$response_file" 2>/dev/null || echo "0")
+    if [[ "$response_size" -lt 50 ]]; then
+        log_warning "Suspiciously short response from $agent_name ($response_size bytes)"
+    fi
+
     # Process agent response
     process_agent_response "$agent_name" "$response_file"
-    
+
     # Log completion
     log_agent "$agent_name" "COMPLETE"
 }
@@ -471,6 +491,9 @@ These markers are for orchestration. They don't replace actual work - do the wor
 
 # DIRECTIVE
 $directive
+
+# DISTILL DIRECTIVE (if active)
+$(if [[ -f "$PANTHEON_ROOT/state/distill_directive.md" ]]; then cat "$PANTHEON_ROOT/state/distill_directive.md"; else echo "No distill mode active."; fi)
 
 # PROJECT ROOT
 $PANTHEON_ROOT
@@ -581,29 +604,71 @@ check_completion() {
 main() {
     local project_brief="$1"
     local max_cycles="${2:-10}"
-    
-    if [[ -z "$project_brief" ]]; then
+    local resume_mode=false
+    local start_cycle=1
+
+    # Parse arguments
+    if [[ "$1" == "--resume" ]]; then
+        resume_mode=true
+        max_cycles="${2:-10}"
+        shift 2 || true
+    fi
+
+    if [[ "$resume_mode" == false && -z "$project_brief" ]]; then
         echo "Usage: $0 <project_brief_file> [max_cycles]"
+        echo "       $0 --resume [max_cycles]"
         echo "       $0 --interactive"
         exit 1
     fi
-    
-    # Initialize
-    init_pantheon
-    
-    # Load project brief
-    if [[ "$project_brief" == "--interactive" ]]; then
-        echo "Enter project brief (Ctrl+D when done):"
-        project_brief=$(cat)
-        echo "$project_brief" > "$PANTHEON_ROOT/state/project_brief.md"
-    elif [[ -f "$project_brief" ]]; then
-        cp "$project_brief" "$PANTHEON_ROOT/state/project_brief.md"
+
+    if [[ "$resume_mode" == true ]]; then
+        # RESUME MODE: Skip initialization, use existing state
+        log_header "RESUMING PANTHEON"
+
+        # Verify state exists
+        if [[ ! -f "$PANTHEON_ROOT/state/project_state.md" ]]; then
+            echo "Error: No existing state to resume from"
+            echo "Run with a project brief first."
+            exit 1
+        fi
+
+        # Get the last cycle number and continue from there
+        start_cycle=$(cat "$PANTHEON_ROOT/state/cycle_count" 2>/dev/null || echo "1")
+
+        # In resume mode, max_cycles is relative (add to current cycle)
+        # e.g., if at cycle 10 and request 2 more cycles, run cycles 10-12
+        max_cycles=$((start_cycle + max_cycles))
+
+        log_info "Resuming from cycle $start_cycle (running until cycle $max_cycles)"
+
+        # Clear rate limit flags if any
+        rm -f "$PANTHEON_ROOT/state/rate_limit.flag" 2>/dev/null || true
+
+        # Don't reinitialize - just source libs
+        source "$PANTHEON_ROOT/lib/colors.sh"
+        source "$PANTHEON_ROOT/lib/logging.sh"
+        source "$PANTHEON_ROOT/lib/state.sh"
+        source "$PANTHEON_ROOT/lib/messaging.sh"
+        source "$PANTHEON_ROOT/lib/spawner.sh"
+
+        log_success "State loaded, continuing..."
     else
-        echo "$project_brief" > "$PANTHEON_ROOT/state/project_brief.md"
-    fi
-    
-    # Initialize project state
-    cat > "$PANTHEON_ROOT/state/project_state.md" << STATE
+        # FRESH START: Initialize everything
+        init_pantheon
+
+        # Load project brief
+        if [[ "$project_brief" == "--interactive" ]]; then
+            echo "Enter project brief (Ctrl+D when done):"
+            project_brief=$(cat)
+            echo "$project_brief" > "$PANTHEON_ROOT/state/project_brief.md"
+        elif [[ -f "$project_brief" ]]; then
+            cp "$project_brief" "$PANTHEON_ROOT/state/project_brief.md"
+        else
+            echo "$project_brief" > "$PANTHEON_ROOT/state/project_brief.md"
+        fi
+
+        # Initialize project state
+        cat > "$PANTHEON_ROOT/state/project_state.md" << STATE
 # PROJECT STATE
 
 ## Brief
@@ -623,15 +688,23 @@ INITIALIZING
 - [ ] Documentation
 - [ ] Delivery
 STATE
+    fi
 
     # Main execution loop
-    for ((cycle=1; cycle<=max_cycles; cycle++)); do
+    for ((cycle=start_cycle; cycle<=max_cycles; cycle++)); do
         echo "$cycle" > "$PANTHEON_ROOT/state/cycle_count"
-        
+
         if run_cycle "$cycle" "$max_cycles"; then
             break
         fi
-        
+
+        # Check for rate limit flag (set by run_agent)
+        if [[ -f "$PANTHEON_ROOT/state/rate_limit.flag" ]]; then
+            log_error "Rate limit detected - pausing orchestrator"
+            log_info "Resume with: $0 --resume $max_cycles"
+            exit 2
+        fi
+
         # Brief pause between cycles
         sleep 1
     done

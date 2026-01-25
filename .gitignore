@@ -1,1 +1,5 @@
 scratch*
+output/
+logs/
+distill*
+state/
