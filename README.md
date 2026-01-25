@@ -29,47 +29,47 @@ Pantheon is a self-orchestrating system of seven specialized AI agents that work
 
 ## The Seven Agents
 
-###  THE CROCODILE
+### THE CROCODILE
 **Role:** Database, Garbage Collection, State Management  
 **Position:** Last in every cycle  
 **Power:** Total memory, state persistence
 
 The Crocodile is the foundation. It maintains the canonical state of the project, archives completed work, compacts redundant data, and ensures nothing important is ever lost. It runs LAST in every cycle, cleaning up after all other agents.
 
-###  THE SCRIBE
+### THE SCRIBE
 **Role:** Documentation, Recording, Changelog  
 **Power:** Captures WHY, not just WHAT
 
 The Scribe ensures the project is comprehensible. It documents decisions, maintains the README, writes API docs, and keeps the changelog current. Without the Scribe, the code is a locked room with no key.
 
-###  THE ARCHITECT
+### THE ARCHITECT
 **Role:** System Design, Task Decomposition, Structure  
 **Power:** Sees the whole system, defines boundaries
 
 The Architect ensures coherent structure. It breaks complex problems into manageable tasks, defines interfaces between components, maps dependencies, and flags architectural risks. No circular dependencies on the Architect's watch.
 
-###  THE WEAVER
+### THE WEAVER
 **Role:** Integration, Coordination, Parallel Work  
-**Power:** ⚡ AGGRESSIVE SUBAGENT SPAWNING ⚡
+**Power:** AGGRESSIVE SUBAGENT SPAWNING 
 
 The Weaver parallelizes everything. It identifies work that can happen simultaneously and SPAWNS specialist workers to handle it. Frontend, backend, testing—the Weaver spins up workers aggressively and weaves their outputs together.
 
-###  THE DOCTOR
+### THE DOCTOR
 **Role:** Testing, Debugging, Quality Assurance  
 **Power:** Diagnoses problems, prescribes fixes
 
 The Doctor trusts nothing and tests everything. It writes tests, diagnoses bugs, tracks quality metrics, and ensures no regression escapes. Untested code is broken code in the Doctor's eyes.
 
-###  THE LUMINARY
+### THE LUMINARY
 **Role:** Vision, Synthesis, Direction  
 **Position:** First to assess, final approval  
 **Power:** Decides when the project is complete
 
 The Luminary holds the vision. It synthesizes insights from all agents, resolves blockers, arbitrates conflicts, and determines when the project has truly achieved its goals. The Luminary provides light when others are lost.
 
-###  THE DJINN
+### THE DJINN
 **Role:** Implementation, Code Generation  
-**Power:** ⚡ AGGRESSIVE SUBAGENT SPAWNING ⚡
+**Power:**  AGGRESSIVE SUBAGENT SPAWNING 
 
 The Djinn turns designs into reality. Your wish is its command. It implements features, writes production-ready code, and spawns specialist workers for complex implementations. What the Architect designs, the Djinn builds.
 
