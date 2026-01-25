@@ -92,7 +92,7 @@ chmod +x /path/to/pantheon/lib/*.sh
 ### Quick Start
 ```bash
 # Run with a simple brief
-./pantheon.sh run "Build a REST API for user management with authentication"
+./pantheon.sh run "Rework Ansible-Navigator for performance"
 
 # Run with a detailed brief file
 ./pantheon.sh run ./my_project_brief.md
@@ -117,23 +117,24 @@ Your brief can be a simple string or a detailed markdown file:
 # Project: User Management API
 
 ## Overview
-Build a RESTful API for user management with the following features:
-- User registration and authentication (JWT)
-- Profile management
-- Role-based access control
+# Project: Revamp Ansible-Navigator (Now with more Rust!)
+
+## Overview
+Rebuild the core functionality of `ansible-navigator` into a high-performance Rust binary. The goal is to provide a "snappier" experience for Ansible developers by eliminating the Python interpreter startup delay and utilizing a modern TUI framework for deep-dive artifact inspection.
 
 ## Technical Requirements
-- Language: Python 3.11+
-- Framework: FastAPI
-- Database: PostgreSQL
-- Auth: JWT with refresh tokens
+- **Language:** Rust (Latest Stable)
+- **UI Framework:** `ratatui` with `crossterm` backend
+- **Data Handling:** `serde_yaml` and `serde_json` for parsing Ansible logs/inventory
+- **Concurrency:** `tokio` for async execution of ansible-playbook processes
+- **State Management:** Custom Redux-like or Elm-architecture state handling within the TUI render loop
 
 ## Deliverables
-- Working API with all endpoints
-- Database migrations
-- Unit and integration tests
-- API documentation
-- Docker configuration
+- **The Engine:** A Rust wrapper that executes `ansible-playbook` and captures stdout/stderr in real-time.
+- **The TUI:** - **Inventory View:** A tree-style browser for hosts and groups.
+    - **Playbook Runner:** A live-streaming log view with syntax highlighting.
+    - **Artifact Inspector:** A searchable pager for looking at host vars and task results.
+- **Testing Suite:** Comprehensive unit tests for YAML parsing and TUI component rendering (using `ratatui`'s TestBackend).
 ```
 
 ### Configuration
@@ -275,5 +276,3 @@ recall "key"
 MIT - Use freely, attribute kindly.
 
 ---
-
-*"In the beginning was chaos. Into chaos we bring light. We are PANTHEON."*
