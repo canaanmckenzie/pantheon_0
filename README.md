@@ -114,7 +114,7 @@ chmod +x /path/to/pantheon/lib/*.sh
 Your brief can be a simple string or a detailed markdown file:
 
 ```markdown
-# Project: User Management API
+# Project: Ansible & Proxmox
 
 ## Overview
 # Project: Revamp Ansible-Navigator (Now with more Rust!)
@@ -241,15 +241,18 @@ Cycles repeat until LUMINARY declares `[COMPLETE]` or max cycles reached.
 ## Extending Pantheon
 
 ### Adding New Agents
+
 1. Create agent prompt file in `agents/`
 2. Add to cycle in `orchestrator.sh`
 3. Register in `init_pantheon()`
 
 ### Adding New Spawn Specializations
+
 1. Add case in `lib/spawner.sh` `get_specialization_prompt()`
 2. Document in README
 
 ### Custom State
+
 Use the Crocodile's memory system:
 ```bash
 source lib/state.sh
@@ -260,14 +263,18 @@ recall "key"
 ## Troubleshooting
 
 ### Agents not executing
+
 - Ensure Claude CLI is installed and authenticated
 - Check `logs/pantheon.log` for errors
 
 ### State corruption
+
 - Run `./pantheon.sh clean` to reset
 - Check `state/checkpoints/` for restore points
-
 ### Spawned agents failing
+
+- Check `spawn/*/response.md` for outputs
+- Increase timeout in `lib/spawner.sh`
 - Check `spawn/*/response.md` for outputs
 - Increase timeout in `lib/spawner.sh`
 
