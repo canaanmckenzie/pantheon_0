@@ -15,12 +15,12 @@ Pantheon is a self-orchestrating system of seven specialized AI agents that work
 ║         │                           │                   │            ║
 ║         │ direction                 │ tasks             │            ║
 ║         ↓                           ↓                   │            ║
-║         SCRIBE ←─── docs ─────── WEAVER ──┬──→ spawn    │            ║
+║         SCRIBE ←─── docs ─────── WEAVER ─────┬──→ spawn │            ║
 ║         ↑                           │        │          │            ║
 ║         │ record                    │        ↓          │            ║
 ║         │                           │     [workers]     │            ║
 ║         │                           ↓                   │            ║
-║         DOCTOR ←── test ───────  DJINN ────   --┴──→ spawn│          ║
+║         DOCTOR ←── test ───────  DJINN ──────┴──→ spawn─│            ║
 ║                                     │                   │            ║
 ║                                     └───────────────────┘            ║
 ║                                                                      ║
