@@ -34,13 +34,13 @@ Examples:
   $0 clean
 
 The Seven Agents:
-    CROCODILE  - State management, garbage collection, the great database
-    SCRIBE     - Documentation, decision recording
+   CROCODILE  - State management, garbage collection, the great database
+   SCRIBE     - Documentation, decision recording
     ARCHITECT  - System design, task decomposition
     WEAVER     - Integration, parallel coordination (spawns subagents)
-    DOCTOR     - Testing, debugging, quality
-    LUMINARY   - Vision, synthesis, direction
-    DJINN      - Implementation, code generation (spawns subagents)
+   DOCTOR     - Testing, debugging, quality
+   LUMINARY   - Vision, synthesis, direction
+   DJINN      - Implementation, code generation (spawns subagents)
 
 USAGE
 }

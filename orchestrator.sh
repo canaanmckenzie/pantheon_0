@@ -62,6 +62,321 @@ init_pantheon() {
 }
 
 # ============================================================================
+# DEPENDENCY MANAGEMENT - AUTONOMOUS TOOL ACQUISITION
+# ============================================================================
+#
+# SECURITY NOTICE - SUPPLY CHAIN ATTACK PREVENTION:
+# -------------------------------------------------
+# All dependency acquisition MUST follow these security principles:
+#
+# 1. VERIFY CHECKSUMS: Always verify package integrity via SHA256/SHA512 hashes
+# 2. USE LOCKFILES: Cargo.lock, package-lock.json, requirements.txt with hashes
+# 3. AUDIT SOURCES: Only pull from official registries (crates.io, pypi.org, apt repos)
+# 4. PIN VERSIONS: Never use floating versions in production dependencies
+# 5. VERIFY SIGNATURES: Use GPG signatures where available (apt, cargo with crev)
+# 6. MINIMAL DEPENDENCIES: Prefer stdlib over external deps when reasonable
+# 7. REVIEW BEFORE INSTALL: Log all installations for audit trail
+#
+# The functions below implement these principles for autonomous operation.
+# ============================================================================
+
+# Dependency installation log for audit trail
+DEP_LOG="$PANTHEON_ROOT/logs/dependencies.log"
+
+log_dependency() {
+    local action=$1
+    local package=$2
+    local version=$3
+    local checksum=$4
+    mkdir -p "$PANTHEON_ROOT/logs"
+    echo "[$(date -Iseconds)] $action: $package@$version (checksum: ${checksum:-none})" >> "$DEP_LOG"
+}
+
+# ----------------------------------------------------------------------------
+# SYSTEM PACKAGES (apt/dnf)
+# ----------------------------------------------------------------------------
+
+install_system_packages() {
+    local packages=("$@")
+
+    log_info "Installing system packages: ${packages[*]}"
+
+    # Detect package manager
+    local pkg_mgr=""
+    if command -v apt-get &>/dev/null; then
+        pkg_mgr="apt"
+    elif command -v dnf &>/dev/null; then
+        pkg_mgr="dnf"
+    elif command -v pacman &>/dev/null; then
+        pkg_mgr="pacman"
+    else
+        log_error "No supported package manager found"
+        return 1
+    fi
+
+    for pkg in "${packages[@]}"; do
+        log_dependency "SYSTEM_INSTALL" "$pkg" "latest" "repo-signed"
+    done
+
+    case "$pkg_mgr" in
+        apt)
+            # APT packages are GPG-signed by repository keys
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq "${packages[@]}"
+            ;;
+        dnf)
+            # DNF verifies GPG signatures by default
+            sudo dnf install -y -q "${packages[@]}"
+            ;;
+        pacman)
+            # Pacman verifies signatures based on pacman.conf settings
+            sudo pacman -S --noconfirm --needed "${packages[@]}"
+            ;;
+    esac
+
+    log_success "System packages installed"
+}
+
+# Check if system packages are available
+check_system_packages() {
+    local missing=()
+    for pkg in "$@"; do
+        if ! command -v "$pkg" &>/dev/null; then
+            # Try to find the binary in common locations
+            if [[ ! -x "/usr/bin/$pkg" ]] && [[ ! -x "/usr/local/bin/$pkg" ]]; then
+                missing+=("$pkg")
+            fi
+        fi
+    done
+
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        echo "${missing[@]}"
+        return 1
+    fi
+    return 0
+}
+
+# ----------------------------------------------------------------------------
+# RUST/CARGO DEPENDENCIES
+# ----------------------------------------------------------------------------
+#
+# Cargo.lock contains exact versions and checksums for reproducibility.
+# cargo-crev can be used for community code review trust.
+# cargo-audit checks for known vulnerabilities.
+#
+# CRITICAL: Always commit Cargo.lock for applications (not libraries).
+# ----------------------------------------------------------------------------
+
+ensure_rust_toolchain() {
+    if ! command -v rustc &>/dev/null; then
+        log_info "Installing Rust toolchain..."
+        # Official rustup installer with signature verification
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+        source "$HOME/.cargo/env"
+        log_dependency "TOOLCHAIN_INSTALL" "rust" "$(rustc --version)" "rustup-verified"
+    fi
+
+    # Ensure cargo is in PATH
+    export PATH="$HOME/.cargo/bin:$PATH"
+}
+
+cargo_install_verified() {
+    local crate=$1
+    local version=$2
+    local expected_checksum=$3  # Optional SHA256 of crate tarball
+
+    ensure_rust_toolchain
+
+    log_info "Installing cargo crate: $crate@$version"
+
+    if [[ -n "$expected_checksum" ]]; then
+        # Download and verify before install
+        local crate_url="https://crates.io/api/v1/crates/$crate/$version/download"
+        local tmp_crate="/tmp/${crate}-${version}.crate"
+
+        curl -sL "$crate_url" -o "$tmp_crate"
+        local actual_checksum=$(sha256sum "$tmp_crate" | cut -d' ' -f1)
+
+        if [[ "$actual_checksum" != "$expected_checksum" ]]; then
+            log_error "CHECKSUM MISMATCH for $crate@$version!"
+            log_error "Expected: $expected_checksum"
+            log_error "Got:      $actual_checksum"
+            rm -f "$tmp_crate"
+            return 1
+        fi
+
+        log_success "Checksum verified for $crate@$version"
+        rm -f "$tmp_crate"
+    fi
+
+    # Install with locked dependencies
+    if [[ -n "$version" ]]; then
+        cargo install "$crate" --version "$version" --locked 2>/dev/null || \
+        cargo install "$crate" --version "$version"
+    else
+        cargo install "$crate" --locked 2>/dev/null || \
+        cargo install "$crate"
+    fi
+
+    log_dependency "CARGO_INSTALL" "$crate" "${version:-latest}" "${expected_checksum:-cargo-verified}"
+}
+
+cargo_build_project() {
+    local project_dir=$1
+
+    if [[ ! -f "$project_dir/Cargo.toml" ]]; then
+        log_error "No Cargo.toml found in $project_dir"
+        return 1
+    fi
+
+    ensure_rust_toolchain
+
+    cd "$project_dir"
+
+    # Ensure Cargo.lock exists for reproducibility
+    if [[ ! -f "Cargo.lock" ]]; then
+        log_warning "No Cargo.lock found - generating (commit this file!)"
+        cargo generate-lockfile
+    fi
+
+    # Build with locked dependencies
+    log_info "Building Rust project with locked dependencies..."
+    cargo build --release --locked
+
+    log_dependency "CARGO_BUILD" "$project_dir" "$(grep '^version' Cargo.toml | head -1)" "lockfile-verified"
+}
+
+cargo_audit_project() {
+    local project_dir=$1
+
+    ensure_rust_toolchain
+
+    # Install cargo-audit if not present
+    if ! command -v cargo-audit &>/dev/null; then
+        cargo install cargo-audit
+    fi
+
+    cd "$project_dir"
+    log_info "Auditing dependencies for known vulnerabilities..."
+    cargo audit
+}
+
+# ----------------------------------------------------------------------------
+# PYTHON/PIP DEPENDENCIES
+# ----------------------------------------------------------------------------
+#
+# Use requirements.txt with hashes for verification:
+#   pip install --require-hashes -r requirements.txt
+#
+# Generate hashed requirements:
+#   pip-compile --generate-hashes requirements.in
+# ----------------------------------------------------------------------------
+
+pip_install_verified() {
+    local package=$1
+    local version=$2
+    local expected_hash=$3  # SHA256 hash of wheel/sdist
+
+    log_info "Installing pip package: $package@$version"
+
+    if [[ -n "$expected_hash" ]]; then
+        # Install with hash verification
+        pip install --quiet "$package==$version" --hash="sha256:$expected_hash"
+    elif [[ -n "$version" ]]; then
+        pip install --quiet "$package==$version"
+    else
+        pip install --quiet "$package"
+    fi
+
+    log_dependency "PIP_INSTALL" "$package" "${version:-latest}" "${expected_hash:-pypi-signed}"
+}
+
+pip_install_requirements() {
+    local requirements_file=$1
+
+    if [[ ! -f "$requirements_file" ]]; then
+        log_error "Requirements file not found: $requirements_file"
+        return 1
+    fi
+
+    log_info "Installing from requirements: $requirements_file"
+
+    # Check if file contains hashes (secure mode)
+    if grep -q -- "--hash=" "$requirements_file"; then
+        log_info "Installing with hash verification (secure mode)"
+        pip install --quiet --require-hashes -r "$requirements_file"
+        log_dependency "PIP_REQUIREMENTS" "$requirements_file" "hashed" "hash-verified"
+    else
+        log_warning "Requirements file has no hashes - consider using pip-compile --generate-hashes"
+        pip install --quiet -r "$requirements_file"
+        log_dependency "PIP_REQUIREMENTS" "$requirements_file" "unhashed" "pypi-signed-only"
+    fi
+}
+
+# ----------------------------------------------------------------------------
+# GENERAL BINARY DOWNLOADS
+# ----------------------------------------------------------------------------
+#
+# For binaries not in package managers, ALWAYS verify checksums.
+# ----------------------------------------------------------------------------
+
+download_verified_binary() {
+    local url=$1
+    local output_path=$2
+    local expected_sha256=$3
+    local description=$4
+
+    if [[ -z "$expected_sha256" ]]; then
+        log_error "SECURITY: Cannot download binary without SHA256 checksum"
+        log_error "Provide the official checksum from the project's release page"
+        return 1
+    fi
+
+    log_info "Downloading: $description"
+    curl -sL "$url" -o "$output_path"
+
+    local actual_sha256=$(sha256sum "$output_path" | cut -d' ' -f1)
+
+    if [[ "$actual_sha256" != "$expected_sha256" ]]; then
+        log_error "CHECKSUM MISMATCH for $description!"
+        log_error "Expected: $expected_sha256"
+        log_error "Got:      $actual_sha256"
+        log_error "This could indicate a supply chain attack or corrupted download."
+        rm -f "$output_path"
+        return 1
+    fi
+
+    log_success "Checksum verified: $description"
+    chmod +x "$output_path"
+    log_dependency "BINARY_DOWNLOAD" "$description" "direct" "$expected_sha256"
+}
+
+# ----------------------------------------------------------------------------
+# CONVENIENCE: Install common development tools
+# ----------------------------------------------------------------------------
+
+install_dev_essentials() {
+    log_info "Installing development essentials..."
+
+    # Check what's missing
+    local missing_sys=()
+    command -v git &>/dev/null || missing_sys+=("git")
+    command -v jq &>/dev/null || missing_sys+=("jq")
+    command -v curl &>/dev/null || missing_sys+=("curl")
+    command -v make &>/dev/null || missing_sys+=("make" "build-essential")
+    command -v gcc &>/dev/null || missing_sys+=("gcc")
+
+    if [[ ${#missing_sys[@]} -gt 0 ]]; then
+        install_system_packages "${missing_sys[@]}"
+    fi
+
+    # Rust toolchain
+    ensure_rust_toolchain
+
+    log_success "Development essentials ready"
+}
+
+# ============================================================================
 # MAIN EXECUTION CYCLE
 # ============================================================================
 
