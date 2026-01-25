@@ -1,0 +1,44 @@
+{
+  "crocodile": {
+    "registered": true,
+    "complete": "true",
+    "cycles": 0,
+    "last_active": null
+  },
+  "scribe": {
+    "registered": true,
+    "complete": "true",
+    "cycles": 0,
+    "last_active": null
+  },
+  "architect": {
+    "registered": true,
+    "complete": "true",
+    "cycles": 0,
+    "last_active": null
+  },
+  "weaver": {
+    "registered": true,
+    "complete": "true",
+    "cycles": 0,
+    "last_active": null
+  },
+  "doctor": {
+    "registered": true,
+    "complete": "true",
+    "cycles": 0,
+    "last_active": null
+  },
+  "luminary": {
+    "registered": true,
+    "complete": false,
+    "cycles": 0,
+    "last_active": null
+  },
+  "djinn": {
+    "registered": true,
+    "complete": false,
+    "cycles": 0,
+    "last_active": null
+  }
+}

@@ -1,0 +1,164 @@
+[
+  {
+    "path": "tests/test_ipc_protocol.c",
+    "creator": "doctor",
+    "type": "file",
+    "created": "2026-01-24T21:32:43-05:00"
+  },
+  {
+    "path": "tests/test_service_lifecycle.c",
+    "creator": "doctor",
+    "type": "file",
+    "created": "2026-01-24T21:32:43-05:00"
+  },
+  {
+    "path": "tests/test_tun_adapter.c",
+    "creator": "doctor",
+    "type": "file",
+    "created": "2026-01-24T21:32:43-05:00"
+  },
+  {
+    "path": "tests/test_privilege_boundary.c",
+    "creator": "doctor",
+    "type": "file",
+    "created": "2026-01-24T21:32:43-05:00"
+  },
+  {
+    "path": "tests/CMakeLists.txt",
+    "creator": "doctor",
+    "type": "file",
+    "created": "2026-01-24T21:32:43-05:00"
+  },
+  {
+    "path": "path",
+    "creator": "subagent:spawn_8e3c6f40",
+    "type": "file",
+    "created": "2026-01-24T21:33:20-05:00"
+  },
+  {
+    "path": "src/service/service_main.c",
+    "creator": "subagent:spawn_c2dfdd54",
+    "type": "file",
+    "created": "2026-01-24T21:33:51-05:00"
+  },
+  {
+    "path": "src/service/service_install.c",
+    "creator": "subagent:spawn_c2dfdd54",
+    "type": "file",
+    "created": "2026-01-24T21:33:51-05:00"
+  },
+  {
+    "path": "src/service/service_state.h",
+    "creator": "subagent:spawn_c2dfdd54",
+    "type": "file",
+    "created": "2026-01-24T21:33:51-05:00"
+  },
+  {
+    "path": "src/service/service_state.c",
+    "creator": "subagent:spawn_c2dfdd54",
+    "type": "file",
+    "created": "2026-01-24T21:33:51-05:00"
+  },
+  {
+    "path": "src/service/service.h",
+    "creator": "subagent:spawn_c2dfdd54",
+    "type": "file",
+    "created": "2026-01-24T21:33:51-05:00"
+  },
+  {
+    "path": "src/ipc/protocol.h",
+    "creator": "subagent:spawn_62a852d9",
+    "type": "file",
+    "created": "2026-01-24T21:34:14-05:00"
+  },
+  {
+    "path": "src/ipc/protocol.c",
+    "creator": "subagent:spawn_62a852d9",
+    "type": "file",
+    "created": "2026-01-24T21:34:14-05:00"
+  },
+  {
+    "path": "docs/IPC_PROTOCOL_SPEC.md",
+    "creator": "subagent:spawn_62a852d9",
+    "type": "file",
+    "created": "2026-01-24T21:34:14-05:00"
+  },
+  {
+    "path": "docker/Dockerfile.windows",
+    "creator": "subagent:spawn_c240be58",
+    "type": "file",
+    "created": "2026-01-24T21:35:20-05:00"
+  },
+  {
+    "path": "Makefile.windows",
+    "creator": "subagent:spawn_c240be58",
+    "type": "file",
+    "created": "2026-01-24T21:35:20-05:00"
+  },
+  {
+    "path": "cmake/mingw-toolchain.cmake",
+    "creator": "subagent:spawn_c240be58",
+    "type": "file",
+    "created": "2026-01-24T21:35:20-05:00"
+  },
+  {
+    "path": ".github/workflows/build-windows.yml",
+    "creator": "subagent:spawn_c240be58",
+    "type": "file",
+    "created": "2026-01-24T21:35:20-05:00"
+  },
+  {
+    "path": "installer/hinkypunk.nsi",
+    "creator": "subagent:spawn_c240be58",
+    "type": "file",
+    "created": "2026-01-24T21:35:20-05:00"
+  },
+  {
+    "path": "docker-compose.yml",
+    "creator": "subagent:spawn_c240be58",
+    "type": "file",
+    "created": "2026-01-24T21:35:20-05:00"
+  },
+  {
+    "path": "scripts/build-windows.sh",
+    "creator": "subagent:spawn_c240be58",
+    "type": "file",
+    "created": "2026-01-24T21:35:20-05:00"
+  },
+  {
+    "path": "docs/WINDOWS_BUILD_SYSTEM.md",
+    "creator": "subagent:spawn_c240be58",
+    "type": "file",
+    "created": "2026-01-24T21:35:20-05:00"
+  },
+  {
+    "path": "Makefile.integration",
+    "creator": "subagent:spawn_c240be58",
+    "type": "file",
+    "created": "2026-01-24T21:35:20-05:00"
+  },
+  {
+    "path": "docs/ARCHITECTURE.md",
+    "creator": "subagent:spawn_f41b4af0",
+    "type": "file",
+    "created": "2026-01-24T21:36:55-05:00"
+  },
+  {
+    "path": "docs/ARCHITECTURE_DIAGRAMS.md",
+    "creator": "subagent:spawn_f41b4af0",
+    "type": "file",
+    "created": "2026-01-24T21:36:55-05:00"
+  },
+  {
+    "path": "docs/ARCHITECTURE.md",
+    "creator": "subagent:spawn_f41b4af0",
+    "type": "file",
+    "created": "2026-01-24T21:36:55-05:00"
+  },
+  {
+    "path": "docs/ARCHITECTURE_DIAGRAMS.md",
+    "creator": "subagent:spawn_f41b4af0",
+    "type": "file",
+    "created": "2026-01-24T21:36:55-05:00"
+  }
+]
