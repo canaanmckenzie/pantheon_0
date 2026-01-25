@@ -5,26 +5,26 @@
 Pantheon is a self-orchestrating system of seven specialized AI agents that work together to build software projects. Give it a brief, and the agents collaborate—spawning workers, managing state, testing code, and documenting everything—until the project is complete.
 
 ```
-╔═══════════════════════════════════════════════════════════════════════╗
-║                                                                       ║
-║      CROCODILE ←──────────────────────────────────────┐            ║
+╔══════════════════════════════════════════════════════════════════════╗
+║                                                                      ║
+║         CROCODILE ←─────────────────────────────────────┐            ║
 ║         ↑                                               │            ║
 ║         │ state                                         │ persist    ║
 ║         │                                               │            ║
-║      LUMINARY ─── vision ───→ ARCHITECT           │            ║
+║         LUMINARY ─── vision ───→ ARCHITECT              │            ║
 ║         │                           │                   │            ║
 ║         │ direction                 │ tasks             │            ║
 ║         ↓                           ↓                   │            ║
-║      SCRIBE ←─── docs ─────── WEAVER ──┬──→ spawn │            ║
+║         SCRIBE ←─── docs ─────── WEAVER ──┬──→ spawn    │            ║
 ║         ↑                           │        │          │            ║
 ║         │ record                    │        ↓          │            ║
-║         │                           │    [workers]      │            ║
+║         │                           │     [workers]     │            ║
 ║         │                           ↓                   │            ║
-║      DOCTOR ←── test ───────  DJINN ────┴──→ spawn │            ║
+║         DOCTOR ←── test ───────  DJINN ────   --┴──→ spawn│          ║
 ║                                     │                   │            ║
 ║                                     └───────────────────┘            ║
-║                                                                       ║
-╚═══════════════════════════════════════════════════════════════════════╝
+║                                                                      ║
+╚══════════════════════════════════════════════════════════════════════╝
 ```
 
 ## The Seven Agents
