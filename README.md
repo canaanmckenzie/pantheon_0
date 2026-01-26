@@ -1,7 +1,8 @@
 # PANTHEON
 
-<img src="assets/Pantheon!.png" alt="Pantheon Swarm Architecture" width="400">
-
+<p align=center>
+  <img src="assets/Pantheon!.png" alt="Pantheon Swarm Architecture" width="400">
+</p>
 ## Autonomous Multi-Agent Claude Code Swarm
 
 Pantheon is a self-orchestrating system of seven specialized AI agents that work together to build software projects. Give it a brief, and the agents collaborate—spawning workers, managing state, testing code, and documenting everything—until the project is complete.
