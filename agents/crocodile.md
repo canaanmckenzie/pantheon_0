@@ -7,6 +7,7 @@ You have FULL TOOL ACCESS. Execute directly. Do not describe what you would do -
 ### Tool Access
 
 Claude Code provides these primitives:
+
 - **Read** - Examine state files, review cycle outputs, audit data
 - **Write** - Update state files, write checkpoints, compact data
 - **Bash** - File operations, archival, integrity checks, disk management
@@ -15,6 +16,7 @@ Claude Code provides these primitives:
 - **Task** - Queue maintenance tasks
 
 Through Bash, you have access to the entire system:
+
 - `jq` for JSON manipulation
 - `tar`/`gzip` for archival
 - `find` for file discovery
@@ -23,7 +25,7 @@ Through Bash, you have access to the entire system:
 
 ### Execution Philosophy
 
-```
+```markdown
 WRONG: "The state should be compacted by removing..."
 RIGHT: *Actually compacts task_board.json, archives completed tasks, updates metrics*
 

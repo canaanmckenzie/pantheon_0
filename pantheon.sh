@@ -29,7 +29,7 @@ Options:
   --verbose         Enable verbose output
 
 Examples:
-  $0 run "Build a REST API for user management"
+  $0 run "Build A TUI that hooks into Proxmox"
   $0 run ./project_brief.md --cycles 20
   $0 distill                    # Run improvement cycle from distill.md
   $0 resume 3                   # Resume with 3 more cycles
@@ -38,13 +38,13 @@ Examples:
   $0 clean
 
 The Seven Agents:
-   CROCODILE  - State management, garbage collection, the great database
-   SCRIBE     - Documentation, decision recording
+    CROCODILE  - State management, garbage collection, the great database
+    SCRIBE     - Documentation, decision recording
     ARCHITECT  - System design, task decomposition
     WEAVER     - Integration, parallel coordination (spawns subagents)
-   DOCTOR     - Testing, debugging, quality
-   LUMINARY   - Vision, synthesis, direction
-   DJINN      - Implementation, code generation (spawns subagents)
+    DOCTOR     - Testing, debugging, quality
+    LUMINARY   - Vision, synthesis, direction
+    DJINN      - Implementation, code generation (spawns subagents)
 
 USAGE
 }
