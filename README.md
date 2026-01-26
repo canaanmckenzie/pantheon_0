@@ -1,6 +1,6 @@
 # PANTHEON
 
-<img src="assets/Pantheon!.png" alt="Pantheon Swarm Architecture" width="800">
+<img src="assets/Pantheon!.png" alt="Pantheon Swarm Architecture" width="400">
 
 ## Autonomous Multi-Agent Claude Code Swarm
 
