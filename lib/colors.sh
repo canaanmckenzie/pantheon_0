@@ -1,5 +1,7 @@
 #!/bin/bash
-# Terminal colors and formatting
+# =============================================================================
+# TERMINAL COLORS AND FORMATTING
+# =============================================================================
 
 # Colors
 RED='\033[0;31m'
@@ -13,18 +15,38 @@ BOLD='\033[1m'
 DIM='\033[2m'
 NC='\033[0m' # No Color
 
-# Agent colors
+# Agent colors (each agent gets a distinct color)
 declare -A AGENT_COLORS=(
-    ["crocodile"]="$GREEN"
-    ["scribe"]="$CYAN"
+    ["luminary"]="$YELLOW"
     ["architect"]="$BLUE"
     ["weaver"]="$MAGENTA"
-    ["doctor"]="$RED"
-    ["luminary"]="$YELLOW"
     ["djinn"]="$WHITE"
+    ["doctor"]="$RED"
+    ["scribe"]="$CYAN"
+    ["crocodile"]="$GREEN"
+)
+
+# Model tier colors (for logging)
+declare -A MODEL_COLORS=(
+    ["haiku"]="$GREEN"
+    ["sonnet"]="$YELLOW"
+    ["opus"]="$RED"
 )
 
 get_agent_color() {
     local agent=$1
     echo "${AGENT_COLORS[$agent]:-$NC}"
+}
+
+get_model_color() {
+    local model=$1
+    if [[ "$model" == *"haiku"* ]]; then
+        echo "$GREEN"
+    elif [[ "$model" == *"sonnet"* ]]; then
+        echo "$YELLOW"
+    elif [[ "$model" == *"opus"* ]]; then
+        echo "$RED"
+    else
+        echo "$NC"
+    fi
 }

@@ -1,678 +1,758 @@
 #!/bin/bash
+# shellcheck source-path=SCRIPTDIR
+
+# =============================================================================
+# PANTHEON ORCHESTRATOR - OPTIMIZED
+# =============================================================================
 #
-# PANTHEON ORCHESTRATOR
 # Autonomous Multi-Agent Claude Code Swarm
-# 
-# The Seven: Crocodile, Scribe, Architect, Weaver, Doctor, Luminary, Djinn
 #
+# MAJOR OPTIMIZATIONS:
+# --------------------
+# 1. MODEL TIERING: Each agent uses the cheapest appropriate model
+# 2. CONDITIONAL EXECUTION: Agents skip when they have no work
+# 3. SMART CONTEXT: Each agent gets tailored context, not full state dump
+# 4. SPAWN BUDGETS: Limited spawns per cycle to control token usage
+# 5. RATE LIMIT HANDLING: Graceful pause and resume capability
+#
+# ESTIMATED SAVINGS vs ORIGINAL:
+# ------------------------------
+# - Model tiering:       40-60% reduction (Haiku for routine work)
+# - Conditional exec:    20-30% reduction (skip idle agents)
+# - Smart context:       30-40% reduction (less input tokens)
+# - Spawn budgets:       50-70% reduction (controlled spawning)
+# - Combined:            70-85% total reduction in token usage
+#
+# =============================================================================
 
 set -e
 
 PANTHEON_ROOT="$(cd "$(dirname "$0")" && pwd)"
 export PANTHEON_ROOT
 
-# Source core libraries
+# =============================================================================
+# SOURCE LIBRARIES
+# =============================================================================
+
+# Source directories.sh FIRST to set up path variables
+source "$PANTHEON_ROOT/lib/directories.sh"
+
+# Then other libraries
 source "$PANTHEON_ROOT/lib/colors.sh"
 source "$PANTHEON_ROOT/lib/logging.sh"
 source "$PANTHEON_ROOT/lib/state.sh"
 source "$PANTHEON_ROOT/lib/messaging.sh"
 source "$PANTHEON_ROOT/lib/spawner.sh"
+source "$PANTHEON_ROOT/lib/models.sh"
+source "$PANTHEON_ROOT/lib/context.sh"
+source "$PANTHEON_ROOT/lib/conditional.sh"
+source "$PANTHEON_ROOT/lib/verify.sh"
+source "$PANTHEON_ROOT/lib/quality.sh"
 
-# ============================================================================
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+
+# Maximum cycles (override with PANTHEON_MAX_CYCLES or --cycles flag)
+MAX_CYCLES="${PANTHEON_MAX_CYCLES:-10}"
+
+# Maximum spawns per cycle (override with PANTHEON_MAX_SPAWNS_PER_CYCLE)
+export PANTHEON_MAX_SPAWNS_PER_CYCLE="${PANTHEON_MAX_SPAWNS_PER_CYCLE:-3}"
+
+# Agent timeout in seconds (increased for implementation agents)
+AGENT_TIMEOUT="${PANTHEON_AGENT_TIMEOUT:-300}"
+
+# =============================================================================
 # INITIALIZATION
-# ============================================================================
+# =============================================================================
 
 init_pantheon() {
-    log_header "PANTHEON SWARM INITIALIZING"
+    log_header "PANTHEON SWARM INITIALIZING (RIGID STRUCTURE)"
 
-    # Create all required directories
-    mkdir -p "$PANTHEON_ROOT/state"
-    mkdir -p "$PANTHEON_ROOT/state/checkpoints"
-    mkdir -p "$PANTHEON_ROOT/logs"
-    mkdir -p "$PANTHEON_ROOT/tasks"
-    mkdir -p "$PANTHEON_ROOT/spawn"
-    mkdir -p "$PANTHEON_ROOT/spawn/archive"
-    mkdir -p "$PANTHEON_ROOT/output"
+    # =========================================================================
+    # RIGID DIRECTORY STRUCTURE - ALL system directories inside .pantheon/
+    # =========================================================================
+    # NO directories created in root except .pantheon/ and projects/
+    # This is ENFORCED - do not add mkdir for root-level directories
+    # =========================================================================
+    init_pantheon_directories
 
-    # Initialize state (Crocodile's domain)
+    # Initialize subsystems (AFTER directories exist)
     init_state_db
+    init_spawn_system
 
-    # Clear previous run artifacts
-    rm -f "$PANTHEON_ROOT/tasks/"*.task 2>/dev/null || true
-    rm -f "$PANTHEON_ROOT/logs/"*.log 2>/dev/null || true
-    rm -f "$PANTHEON_ROOT/state/"*.lock 2>/dev/null || true
-    
-    # Initialize task board and all state files
-    echo "[]" > "$PANTHEON_ROOT/state/task_board.json"
-    echo "[]" > "$PANTHEON_ROOT/state/message_queue.json"
-    echo "{}" > "$PANTHEON_ROOT/state/agent_status.json"
-    echo "[]" > "$PANTHEON_ROOT/state/artifacts.json"
-    echo "[]" > "$PANTHEON_ROOT/state/spawn_queue.json"
-    echo "[]" > "$PANTHEON_ROOT/state/spawn_registry.json"
-    echo "{}" > "$PANTHEON_ROOT/state/memory.json"
-    echo "[]" > "$PANTHEON_ROOT/state/decisions.json"
-    echo "0" > "$PANTHEON_ROOT/state/cycle_count"
-    
-    # Register all agents
-    for agent in crocodile scribe architect weaver doctor luminary djinn; do
-        register_agent "$agent"
-    done
-    
-    log_success "Pantheon initialized"
-}
+    # Clear previous run artifacts (ONLY from .pantheon/)
+    rm -f "$PANTHEON_STATE_DIR/"*.lock 2>/dev/null || true
+    rm -f "$PANTHEON_STATE_DIR/rate_limit.flag" 2>/dev/null || true
 
-# ============================================================================
-# DEPENDENCY MANAGEMENT - AUTONOMOUS TOOL ACQUISITION
-# ============================================================================
-#
-# SECURITY NOTICE - SUPPLY CHAIN ATTACK PREVENTION:
-# -------------------------------------------------
-# All dependency acquisition MUST follow these security principles:
-#
-# 1. VERIFY CHECKSUMS: Always verify package integrity via SHA256/SHA512 hashes
-# 2. USE LOCKFILES: Cargo.lock, package-lock.json, requirements.txt with hashes
-# 3. AUDIT SOURCES: Only pull from official registries (crates.io, pypi.org, apt repos)
-# 4. PIN VERSIONS: Never use floating versions in production dependencies
-# 5. VERIFY SIGNATURES: Use GPG signatures where available (apt, cargo with crev)
-# 6. MINIMAL DEPENDENCIES: Prefer stdlib over external deps when reasonable
-# 7. REVIEW BEFORE INSTALL: Log all installations for audit trail
-#
-# The functions below implement these principles for autonomous operation.
-# ============================================================================
+    # =========================================================================
+    # STATE FILE INITIALIZATION - ONLY in .pantheon/state/
+    # =========================================================================
+    echo "[]" > "$PANTHEON_STATE_DIR/task_board.json"
+    echo "[]" > "$PANTHEON_STATE_DIR/message_queue.json"
+    echo "{}" > "$PANTHEON_STATE_DIR/agent_status.json"
+    echo "[]" > "$PANTHEON_STATE_DIR/artifacts.json"
+    echo "[]" > "$PANTHEON_STATE_DIR/spawn_queue.json"
+    echo "[]" > "$PANTHEON_STATE_DIR/spawn_registry.json"
+    echo "{}" > "$PANTHEON_STATE_DIR/memory.json"
+    echo "[]" > "$PANTHEON_STATE_DIR/decisions.json"
+    echo "0" > "$PANTHEON_STATE_DIR/cycle_count"
 
-# Dependency installation log for audit trail
-DEP_LOG="$PANTHEON_ROOT/logs/dependencies.log"
+    # =========================================================================
+    # DIRECTORY STRUCTURE VALIDATION & CLEANUP
+    # =========================================================================
+    local dir_mode="${PANTHEON_DIRECTORY_MODE:-fix}"  # Default to fix mode
+    log_info "Directory structure validation (mode: $dir_mode)..."
 
-log_dependency() {
-    local action=$1
-    local package=$2
-    local version=$3
-    local checksum=$4
-    mkdir -p "$PANTHEON_ROOT/logs"
-    echo "[$(date -Iseconds)] $action: $package@$version (checksum: ${checksum:-none})" >> "$DEP_LOG"
-}
-
-# ----------------------------------------------------------------------------
-# SYSTEM PACKAGES (apt/dnf)
-# ----------------------------------------------------------------------------
-
-install_system_packages() {
-    local packages=("$@")
-
-    log_info "Installing system packages: ${packages[*]}"
-
-    # Detect package manager
-    local pkg_mgr=""
-    if command -v apt-get &>/dev/null; then
-        pkg_mgr="apt"
-    elif command -v dnf &>/dev/null; then
-        pkg_mgr="dnf"
-    elif command -v pacman &>/dev/null; then
-        pkg_mgr="pacman"
-    else
-        log_error "No supported package manager found"
-        return 1
-    fi
-
-    for pkg in "${packages[@]}"; do
-        log_dependency "SYSTEM_INSTALL" "$pkg" "latest" "repo-signed"
-    done
-
-    case "$pkg_mgr" in
-        apt)
-            # APT packages are GPG-signed by repository keys
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq "${packages[@]}"
+    case "$dir_mode" in
+        fix)
+            log_info "Fixing directory structure and cleaning up..."
+            fix_directory_structure 2>&1 | while read line; do
+                [[ -n "$line" ]] && log_info "  $line"
+            done
             ;;
-        dnf)
-            # DNF verifies GPG signatures by default
-            sudo dnf install -y -q "${packages[@]}"
+        strict)
+            if ! validate_directory_structure >/dev/null 2>&1; then
+                log_error "Directory structure validation failed in strict mode"
+                validate_directory_structure
+                exit 1
+            fi
             ;;
-        pacman)
-            # Pacman verifies signatures based on pacman.conf settings
-            sudo pacman -S --noconfirm --needed "${packages[@]}"
+        warn|*)
+            validate_directory_structure 2>&1 | while read line; do
+                [[ "$line" == *"ERROR"* ]] && log_warning "$line"
+                [[ "$line" == *"WARNING"* ]] && log_warning "$line"
+            done
             ;;
     esac
 
-    log_success "System packages installed"
-}
+    # Detect and store project name (ONLY in .pantheon/state/)
+    local project_name=$(detect_project_name)
+    if [[ -n "$project_name" ]]; then
+        echo "$project_name" > "$PANTHEON_STATE_DIR/project_name"
+        local project_dir=$(get_project_dir)
+        log_info "Detected project: $project_name"
+        log_info "Project directory: $project_dir"
+    fi
 
-# Check if system packages are available
-check_system_packages() {
-    local missing=()
-    for pkg in "$@"; do
-        if ! command -v "$pkg" &>/dev/null; then
-            # Try to find the binary in common locations
-            if [[ ! -x "/usr/bin/$pkg" ]] && [[ ! -x "/usr/local/bin/$pkg" ]]; then
-                missing+=("$pkg")
-            fi
-        fi
+    # Register agents
+    for agent in luminary architect weaver djinn doctor aletheia scribe crocodile; do
+        register_agent "$agent"
     done
 
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        echo "${missing[@]}"
+    log_success "Pantheon initialized"
+    log_info "System directory: $PANTHEON_SYSTEM_DIR"
+    log_info "Projects directory: $PANTHEON_PROJECTS_DIR"
+    log_info "Model tiers: T1=${MODEL_TIER1##*-} T2=${MODEL_TIER2##*-} T3=${MODEL_TIER3##*-}"
+    log_info "Spawn budget: $PANTHEON_MAX_SPAWNS_PER_CYCLE per cycle"
+}
+
+# =============================================================================
+# AGENT EXECUTION
+# =============================================================================
+#
+# This is where the magic happens. Each agent call now:
+# 1. Checks if it should run (conditional execution)
+# 2. Selects the appropriate model (model tiering)
+# 3. Builds tailored context (smart context)
+# 4. Executes with timeout and rate limit detection
+#
+# =============================================================================
+
+run_agent() {
+    local agent_name=$1
+    local directive="$2"
+    
+    # -------------------------------------------------------------------------
+    # STEP 1: Check if agent should run (CONDITIONAL EXECUTION)
+    # -------------------------------------------------------------------------
+    if ! is_agent_forced "$agent_name"; then
+        if ! should_run_agent "$agent_name"; then
+            log_agent_skip "$agent_name" "No work this cycle"
+            mark_agent_skipped "$agent_name"
+            return 0
+        fi
+    fi
+    
+    # -------------------------------------------------------------------------
+    # STEP 2: Select model based on agent and task (MODEL TIERING)
+    # -------------------------------------------------------------------------
+    local model=$(select_model "$agent_name" "$directive")
+    
+    log_agent "$agent_name" "Starting (directive: ${directive:0:50}...)"
+    log_model_selection "$agent_name" "$model" "$(detect_task_complexity "$directive" "$agent_name")"
+    
+    # -------------------------------------------------------------------------
+    # STEP 3: Load agent prompt (OPTIMIZED - shorter prompts)
+    # -------------------------------------------------------------------------
+    local agent_prompt_file="$PANTHEON_ROOT/agents/${agent_name}.md"
+    local agent_prompt=""
+    if [[ -f "$agent_prompt_file" ]]; then
+        agent_prompt=$(cat "$agent_prompt_file")
+    else
+        log_warning "No prompt file for $agent_name"
+        agent_prompt="You are the $agent_name agent. Complete your assigned task."
+    fi
+    
+    # -------------------------------------------------------------------------
+    # STEP 4: Build tailored context (SMART CONTEXT)
+    # -------------------------------------------------------------------------
+    local context=$(build_context "$agent_name" "$directive")
+    log_context_size "$agent_name" "$context"
+    
+    # -------------------------------------------------------------------------
+    # STEP 5: Save context for debugging and input
+    # -------------------------------------------------------------------------
+    local context_file="$PANTHEON_STATE_DIR/context_${agent_name}.md"
+    echo "$context" > "$context_file"
+
+    # -------------------------------------------------------------------------
+    # STEP 6: Execute agent with timeout and rate limit detection
+    # -------------------------------------------------------------------------
+    local response_file="$PANTHEON_STATE_DIR/response_${agent_name}.md"
+    local start_time=$(date +%s)
+
+    # DIAGNOSTIC: Doctor-specific logging
+    if [[ "$agent_name" == "doctor" ]]; then
+        local diag_file="$PANTHEON_LOGS_DIR/doctor_diagnostic.log"
+        echo "" >> "$diag_file"
+        echo "========================================" >> "$diag_file"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] DOCTOR ACTIVATION" >> "$diag_file"
+        echo "----------------------------------------" >> "$diag_file"
+        echo "Model: $model" >> "$diag_file"
+        echo "Context size: $(wc -c < "$context_file") bytes" >> "$diag_file"
+        echo "Context lines: $(wc -l < "$context_file")" >> "$diag_file"
+        echo "Artifacts to test: $(jq '[.[] | select(.tested==false)] | length' "$PANTHEON_STATE_DIR/artifacts.json" 2>/dev/null || echo 0)" >> "$diag_file"
+        echo "Pending test tasks: $(jq '[.[] | select(.status=="pending") | select(.description | test("test"; "i"))] | length' "$PANTHEON_STATE_DIR/task_board.json" 2>/dev/null || echo 0)" >> "$diag_file"
+        echo "Messages for Doctor: $(jq '[.[] | select(.to=="doctor")] | length' "$PANTHEON_STATE_DIR/message_queue.json" 2>/dev/null || echo 0)" >> "$diag_file"
+        echo "Timeout: ${AGENT_TIMEOUT}s" >> "$diag_file"
+        echo "----------------------------------------" >> "$diag_file"
+    fi
+
+    # Execute with timeout - matching pantheon_0 invocation style
+    # Use --system-prompt for agent identity, pipe context as input
+    timeout "$AGENT_TIMEOUT" claude --print --model "$model" \
+        --permission-mode bypassPermissions \
+        --system-prompt "$(cat "$agent_prompt_file")" \
+        < "$context_file" > "$response_file" 2>&1 || {
+        local exit_code=$?
+        if [[ $exit_code -eq 124 ]]; then
+            log_warning "$agent_name timed out after ${AGENT_TIMEOUT}s"
+            # DIAGNOSTIC: Doctor timeout analysis
+            if [[ "$agent_name" == "doctor" ]]; then
+                echo "[$(date '+%H:%M:%S')] TIMEOUT after ${AGENT_TIMEOUT}s" >> "$PANTHEON_LOGS_DIR/doctor_diagnostic.log"
+                echo "Response size at timeout: $(wc -c < "$response_file" 2>/dev/null || echo 0) bytes" >> "$PANTHEON_LOGS_DIR/doctor_diagnostic.log"
+                echo "Response preview (last 500 chars):" >> "$PANTHEON_LOGS_DIR/doctor_diagnostic.log"
+                tail -c 500 "$response_file" >> "$PANTHEON_LOGS_DIR/doctor_diagnostic.log" 2>/dev/null || true
+            fi
+        fi
+    }
+
+    # DIAGNOSTIC: Doctor post-execution analysis
+    if [[ "$agent_name" == "doctor" ]]; then
+        local end_diag=$(date +%s)
+        local dur=$((end_diag - start_time))
+        echo "[$(date '+%H:%M:%S')] Execution completed in ${dur}s" >> "$PANTHEON_LOGS_DIR/doctor_diagnostic.log"
+        echo "Response size: $(wc -c < "$response_file" 2>/dev/null || echo 0) bytes" >> "$PANTHEON_LOGS_DIR/doctor_diagnostic.log"
+        echo "Response lines: $(wc -l < "$response_file" 2>/dev/null || echo 0)" >> "$PANTHEON_LOGS_DIR/doctor_diagnostic.log"
+        echo "Markers found:" >> "$PANTHEON_LOGS_DIR/doctor_diagnostic.log"
+        echo "  [DONE]: $(grep -c '\[DONE' "$response_file" 2>/dev/null || echo 0)" >> "$PANTHEON_LOGS_DIR/doctor_diagnostic.log"
+        echo "  [BUG]: $(grep -c '\[BUG\]' "$response_file" 2>/dev/null || echo 0)" >> "$PANTHEON_LOGS_DIR/doctor_diagnostic.log"
+        echo "  [MSG]: $(grep -c '\[MSG:' "$response_file" 2>/dev/null || echo 0)" >> "$PANTHEON_LOGS_DIR/doctor_diagnostic.log"
+        echo "  [ARTIFACT]: $(grep -c '\[ARTIFACT:' "$response_file" 2>/dev/null || echo 0)" >> "$PANTHEON_LOGS_DIR/doctor_diagnostic.log"
+        echo "  [TEST_RESULTS]: $(grep -c '\[TEST_RESULTS\]' "$response_file" 2>/dev/null || echo 0)" >> "$PANTHEON_LOGS_DIR/doctor_diagnostic.log"
+        echo "========================================" >> "$PANTHEON_LOGS_DIR/doctor_diagnostic.log"
+    fi
+    
+    local end_time=$(date +%s)
+    local duration=$((end_time - start_time))
+    
+    # -------------------------------------------------------------------------
+    # STEP 7: Check for rate limiting
+    # -------------------------------------------------------------------------
+    if grep -qi "rate.limit\|hit your limit\|resets at\|too many requests" "$response_file" 2>/dev/null; then
+        log_rate_limit "$agent_name"
+        touch "$PANTHEON_STATE_DIR/rate_limit.flag"
         return 1
     fi
+    
+    # -------------------------------------------------------------------------
+    # STEP 8: Process response and extract markers
+    # -------------------------------------------------------------------------
+    process_agent_response "$agent_name" "$response_file"
+    
+    # Update agent status
+    increment_agent_cycles "$agent_name"
+    
+    log_success "$agent_name complete (${duration}s)"
     return 0
 }
 
-# ----------------------------------------------------------------------------
-# RUST/CARGO DEPENDENCIES
-# ----------------------------------------------------------------------------
-#
-# Cargo.lock contains exact versions and checksums for reproducibility.
-# cargo-crev can be used for community code review trust.
-# cargo-audit checks for known vulnerabilities.
-#
-# CRITICAL: Always commit Cargo.lock for applications (not libraries).
-# ----------------------------------------------------------------------------
+# =============================================================================
+# RESPONSE PROCESSING
+# =============================================================================
 
-ensure_rust_toolchain() {
-    if ! command -v rustc &>/dev/null; then
-        log_info "Installing Rust toolchain..."
-        # Official rustup installer with signature verification
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-        source "$HOME/.cargo/env"
-        log_dependency "TOOLCHAIN_INSTALL" "rust" "$(rustc --version)" "rustup-verified"
+process_agent_response() {
+    local agent_name=$1
+    local response_file=$2
+
+    if [[ ! -f "$response_file" ]]; then
+        return
     fi
 
-    # Ensure cargo is in PATH
-    export PATH="$HOME/.cargo/bin:$PATH"
-}
+    # -------------------------------------------------------------------------
+    # FIXED: Use perl for multi-line pattern matching + process substitution
+    #
+    # Two bugs fixed:
+    # 1. Original grep patterns failed on multi-line content
+    # 2. Pipe | while runs in subshell, causing file writes to be lost
+    #    Solution: Use process substitution < <(command) instead
+    # -------------------------------------------------------------------------
 
-cargo_install_verified() {
-    local crate=$1
-    local version=$2
-    local expected_checksum=$3  # Optional SHA256 of crate tarball
+    # Extract tasks (multi-line support)
+    while IFS= read -r task; do
+        local clean_task=$(echo "$task" | head -1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        [[ -n "$clean_task" ]] && add_task "$clean_task" "$agent_name"
+    done < <(perl -0777 -ne 'while (/\[TASK\](.*?)\[\/TASK\]/gs) { print "$1\n"; }' "$response_file" 2>/dev/null)
 
-    ensure_rust_toolchain
+    # Extract high priority tasks
+    while IFS= read -r task; do
+        local clean_task=$(echo "$task" | head -1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        [[ -n "$clean_task" ]] && add_task "$clean_task" "$agent_name" "high"
+    done < <(perl -0777 -ne 'while (/\[TASK:high\](.*?)\[\/TASK\]/gs) { print "$1\n"; }' "$response_file" 2>/dev/null)
 
-    log_info "Installing cargo crate: $crate@$version"
+    # Extract messages (multi-line support) - CRITICAL FIX
+    while IFS= read -r -d $'\0' target && IFS= read -r -d $'\0' content; do
+        [[ -n "$target" && -n "$content" ]] && send_message "$agent_name" "$target" "$content"
+    done < <(perl -0777 -ne 'while (/\[MSG:(\w+)\](.*?)\[\/MSG\]/gs) { print "$1\x00$2\x00"; }' "$response_file" 2>/dev/null)
 
-    if [[ -n "$expected_checksum" ]]; then
-        # Download and verify before install
-        local crate_url="https://crates.io/api/v1/crates/$crate/$version/download"
-        local tmp_crate="/tmp/${crate}-${version}.crate"
+    # Extract spawn requests (only weaver and djinn)
+    if [[ "$agent_name" == "weaver" || "$agent_name" == "djinn" ]]; then
+        while IFS= read -r spawn; do
+            local clean_spawn=$(echo "$spawn" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            [[ -n "$clean_spawn" ]] && queue_spawn "$agent_name" "$clean_spawn"
+        done < <(perl -0777 -ne 'while (/\[SPAWN\](.*?)\[\/SPAWN\]/gs) { print "$1\n"; }' "$response_file" 2>/dev/null)
+    fi
 
-        curl -sL "$crate_url" -o "$tmp_crate"
-        local actual_checksum=$(sha256sum "$tmp_crate" | cut -d' ' -f1)
+    # Extract artifacts (single line - process substitution still better)
+    # Note: grep returns 1 when no matches, so add || true to prevent set -e exit
+    while read -r artifact; do
+        [[ -n "$artifact" ]] && register_artifact "$artifact" "$agent_name"
+    done < <(grep -oP '(?<=\[ARTIFACT:)[^\]]+' "$response_file" 2>/dev/null || true)
 
-        if [[ "$actual_checksum" != "$expected_checksum" ]]; then
-            log_error "CHECKSUM MISMATCH for $crate@$version!"
-            log_error "Expected: $expected_checksum"
-            log_error "Got:      $actual_checksum"
-            rm -f "$tmp_crate"
-            return 1
+    # -------------------------------------------------------------------------
+    # TASK COMPLETION - Mark tasks as done
+    # -------------------------------------------------------------------------
+    # Format: [DONE:task_id] or [DONE]task description[/DONE]
+    # This was MISSING - tasks were never being marked complete!
+    # -------------------------------------------------------------------------
+
+    # By task ID
+    while read -r task_id; do
+        [[ -n "$task_id" ]] && complete_task "$task_id"
+    done < <(grep -oP '(?<=\[DONE:)[^\]]+' "$response_file" 2>/dev/null || true)
+
+    # By description match (fuzzy with keyword extraction)
+    while IFS= read -r task_desc; do
+        local clean_desc=$(echo "$task_desc" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | head -c 100)
+        if [[ -n "$clean_desc" ]]; then
+            # DIAGNOSTIC: Log what we're trying to match
+            echo "[$(date +%H:%M:%S)] DONE marker: '$clean_desc'" >> "$PANTHEON_LOGS_DIR/task_matching.log"
+
+            # Extract keywords for broader matching (3+ char words)
+            local keywords=$(echo "$clean_desc" | tr '[:upper:]' '[:lower:]' | grep -oE '[a-z]{3,}' | head -5 | tr '\n' '|' | sed 's/|$//')
+
+            # Try exact substring match first
+            local task_id=$(jq -r --arg desc "$clean_desc" \
+                '.[] | select(.status=="pending") | select(.description | test($desc; "i")) | .id' \
+                "$PANTHEON_STATE_DIR/task_board.json" 2>/dev/null | head -1)
+
+            # If no match, try keyword matching (any 2+ keywords)
+            if [[ -z "$task_id" || "$task_id" == "null" ]] && [[ -n "$keywords" ]]; then
+                task_id=$(jq -r --arg kw "$keywords" \
+                    '.[] | select(.status=="pending") | select(.description | test($kw; "i")) | .id' \
+                    "$PANTHEON_STATE_DIR/task_board.json" 2>/dev/null | head -1)
+                echo "[$(date +%H:%M:%S)]   Keyword match ($keywords) -> $task_id" >> "$PANTHEON_LOGS_DIR/task_matching.log"
+            else
+                echo "[$(date +%H:%M:%S)]   Exact match -> $task_id" >> "$PANTHEON_LOGS_DIR/task_matching.log"
+            fi
+
+            if [[ -n "$task_id" && "$task_id" != "null" ]]; then
+                complete_task "$task_id"
+                echo "[$(date +%H:%M:%S)]   COMPLETED: $task_id" >> "$PANTHEON_LOGS_DIR/task_matching.log"
+            else
+                echo "[$(date +%H:%M:%S)]   NO MATCH FOUND" >> "$PANTHEON_LOGS_DIR/task_matching.log"
+            fi
         fi
+    done < <(perl -0777 -ne 'while (/\[DONE\](.*?)\[\/DONE\]/gs) { print "$1\n"; }' "$response_file" 2>/dev/null)
 
-        log_success "Checksum verified for $crate@$version"
-        rm -f "$tmp_crate"
+    # Check for project completion (only Luminary can declare completion)
+    # FIXED: Match [COMPLETE] at start of line to avoid false positives like
+    # "I will NOT declare [COMPLETE] until..."
+    if grep -qE '^\[COMPLETE\]' "$response_file" 2>/dev/null; then
+        if [[ "$agent_name" == "luminary" ]]; then
+            log_info "Luminary declared [COMPLETE] - will verify at end of cycle"
+            mark_agent_complete "$agent_name"
+        else
+            log_warning "$agent_name attempted [COMPLETE] - only Luminary can declare completion"
+        fi
     fi
-
-    # Install with locked dependencies
-    if [[ -n "$version" ]]; then
-        cargo install "$crate" --version "$version" --locked 2>/dev/null || \
-        cargo install "$crate" --version "$version"
-    else
-        cargo install "$crate" --locked 2>/dev/null || \
-        cargo install "$crate"
-    fi
-
-    log_dependency "CARGO_INSTALL" "$crate" "${version:-latest}" "${expected_checksum:-cargo-verified}"
 }
 
-cargo_build_project() {
-    local project_dir=$1
-
-    if [[ ! -f "$project_dir/Cargo.toml" ]]; then
-        log_error "No Cargo.toml found in $project_dir"
-        return 1
-    fi
-
-    ensure_rust_toolchain
-
-    cd "$project_dir"
-
-    # Ensure Cargo.lock exists for reproducibility
-    if [[ ! -f "Cargo.lock" ]]; then
-        log_warning "No Cargo.lock found - generating (commit this file!)"
-        cargo generate-lockfile
-    fi
-
-    # Build with locked dependencies
-    log_info "Building Rust project with locked dependencies..."
-    cargo build --release --locked
-
-    log_dependency "CARGO_BUILD" "$project_dir" "$(grep '^version' Cargo.toml | head -1)" "lockfile-verified"
-}
-
-cargo_audit_project() {
-    local project_dir=$1
-
-    ensure_rust_toolchain
-
-    # Install cargo-audit if not present
-    if ! command -v cargo-audit &>/dev/null; then
-        cargo install cargo-audit
-    fi
-
-    cd "$project_dir"
-    log_info "Auditing dependencies for known vulnerabilities..."
-    cargo audit
-}
-
-# ----------------------------------------------------------------------------
-# PYTHON/PIP DEPENDENCIES
-# ----------------------------------------------------------------------------
+# =============================================================================
+# CYCLE EXECUTION
+# =============================================================================
 #
-# Use requirements.txt with hashes for verification:
-#   pip install --require-hashes -r requirements.txt
+# A cycle runs through all agents in order:
+# 1. LUMINARY - Strategic assessment (always runs)
+# 2. ARCHITECT - Task decomposition (conditional)
+# 3. WEAVER - Parallel coordination (conditional)
+# 4. DJINN - Implementation (conditional)
+# 5. DOCTOR - Testing (conditional)
+# 6. SCRIBE - Documentation (conditional)
+# 7. CROCODILE - State maintenance (always runs)
 #
-# Generate hashed requirements:
-#   pip-compile --generate-hashes requirements.in
-# ----------------------------------------------------------------------------
-
-pip_install_verified() {
-    local package=$1
-    local version=$2
-    local expected_hash=$3  # SHA256 hash of wheel/sdist
-
-    log_info "Installing pip package: $package@$version"
-
-    if [[ -n "$expected_hash" ]]; then
-        # Install with hash verification
-        pip install --quiet "$package==$version" --hash="sha256:$expected_hash"
-    elif [[ -n "$version" ]]; then
-        pip install --quiet "$package==$version"
-    else
-        pip install --quiet "$package"
-    fi
-
-    log_dependency "PIP_INSTALL" "$package" "${version:-latest}" "${expected_hash:-pypi-signed}"
-}
-
-pip_install_requirements() {
-    local requirements_file=$1
-
-    if [[ ! -f "$requirements_file" ]]; then
-        log_error "Requirements file not found: $requirements_file"
-        return 1
-    fi
-
-    log_info "Installing from requirements: $requirements_file"
-
-    # Check if file contains hashes (secure mode)
-    if grep -q -- "--hash=" "$requirements_file"; then
-        log_info "Installing with hash verification (secure mode)"
-        pip install --quiet --require-hashes -r "$requirements_file"
-        log_dependency "PIP_REQUIREMENTS" "$requirements_file" "hashed" "hash-verified"
-    else
-        log_warning "Requirements file has no hashes - consider using pip-compile --generate-hashes"
-        pip install --quiet -r "$requirements_file"
-        log_dependency "PIP_REQUIREMENTS" "$requirements_file" "unhashed" "pypi-signed-only"
-    fi
-}
-
-# ----------------------------------------------------------------------------
-# GENERAL BINARY DOWNLOADS
-# ----------------------------------------------------------------------------
+# After agents, process spawn queue (with budget).
 #
-# For binaries not in package managers, ALWAYS verify checksums.
-# ----------------------------------------------------------------------------
-
-download_verified_binary() {
-    local url=$1
-    local output_path=$2
-    local expected_sha256=$3
-    local description=$4
-
-    if [[ -z "$expected_sha256" ]]; then
-        log_error "SECURITY: Cannot download binary without SHA256 checksum"
-        log_error "Provide the official checksum from the project's release page"
-        return 1
-    fi
-
-    log_info "Downloading: $description"
-    curl -sL "$url" -o "$output_path"
-
-    local actual_sha256=$(sha256sum "$output_path" | cut -d' ' -f1)
-
-    if [[ "$actual_sha256" != "$expected_sha256" ]]; then
-        log_error "CHECKSUM MISMATCH for $description!"
-        log_error "Expected: $expected_sha256"
-        log_error "Got:      $actual_sha256"
-        log_error "This could indicate a supply chain attack or corrupted download."
-        rm -f "$output_path"
-        return 1
-    fi
-
-    log_success "Checksum verified: $description"
-    chmod +x "$output_path"
-    log_dependency "BINARY_DOWNLOAD" "$description" "direct" "$expected_sha256"
-}
-
-# ----------------------------------------------------------------------------
-# CONVENIENCE: Install common development tools
-# ----------------------------------------------------------------------------
-
-install_dev_essentials() {
-    log_info "Installing development essentials..."
-
-    # Check what's missing
-    local missing_sys=()
-    command -v git &>/dev/null || missing_sys+=("git")
-    command -v jq &>/dev/null || missing_sys+=("jq")
-    command -v curl &>/dev/null || missing_sys+=("curl")
-    command -v make &>/dev/null || missing_sys+=("make" "build-essential")
-    command -v gcc &>/dev/null || missing_sys+=("gcc")
-
-    if [[ ${#missing_sys[@]} -gt 0 ]]; then
-        install_system_packages "${missing_sys[@]}"
-    fi
-
-    # Rust toolchain
-    ensure_rust_toolchain
-
-    log_success "Development essentials ready"
-}
-
-# ============================================================================
-# MAIN EXECUTION CYCLE
-# ============================================================================
+# =============================================================================
 
 run_cycle() {
     local cycle=$1
     local max_cycles=$2
+    local cycle_start=$(date +%s)
     
-    log_header "CYCLE $cycle/$max_cycles"
+    log_header "CYCLE $cycle / $max_cycles"
     
-    # Phase 1: LUMINARY - Vision and synthesis
-    run_agent "luminary" "Assess current state, synthesize direction, identify blockers"
+    # Reset spawn budget for this cycle
+    reset_spawn_budget
     
-    # Phase 2: ARCHITECT - Structure and planning  
-    run_agent "architect" "Review structure, decompose tasks, ensure coherence"
+    # Track metrics
+    local agents_run=0
+    local agents_skipped=0
     
-    # Phase 3: WEAVER - Integration and spawning
-    run_agent "weaver" "Integrate components, spawn workers for parallel tasks"
+    # -------------------------------------------------------------------------
+    # AGENT EXECUTION ORDER
+    # -------------------------------------------------------------------------
+    # Note: Order matters! Luminary sets direction, others follow.
     
-    # Phase 4: DJINN - Implementation and spawning
-    run_agent "djinn" "Implement solutions, spawn specialists as needed"
+    local agents=(luminary architect weaver djinn doctor aletheia scribe crocodile)
     
-    # Phase 5: DOCTOR - Testing and diagnostics
-    run_agent "doctor" "Test implementations, diagnose issues, prescribe fixes"
+    for agent in "${agents[@]}"; do
+        # Build appropriate directive based on cycle phase
+        local directive
+        case "$agent" in
+            luminary)
+                directive="Assess project state. Synthesize direction for cycle $cycle. Check for completion."
+                ;;
+            architect)
+                directive="Review structure. Decompose any large tasks. Define interfaces."
+                ;;
+            weaver)
+                directive="Identify parallel work opportunities. Spawn workers as needed (budget: $(get_spawn_budget))."
+                ;;
+            djinn)
+                directive="Implement pending tasks. Write production code. Spawn for complex work if needed."
+                ;;
+            doctor)
+                directive="Test new artifacts. Diagnose any bugs. Write regression tests."
+                ;;
+            aletheia)
+                directive="Verify all gates. Check for stubs and incomplete features. Override false completions. Keep cycle running until perfect."
+                ;;
+            scribe)
+                directive="Document completed work. Update README and changelog."
+                ;;
+            crocodile)
+                directive="Compact state. Archive completed tasks. Create checkpoint if needed."
+                ;;
+        esac
+        
+        if run_agent "$agent" "$directive"; then
+            # Note: ((expr++)) returns 1 when expr is 0, which triggers set -e
+            # Use || true to prevent exit
+            ((agents_run++)) || true
+        else
+            # Check if we hit rate limit
+            if [[ -f "$PANTHEON_STATE_DIR/rate_limit.flag" ]]; then
+                log_error "Rate limit hit - stopping cycle"
+                return 2
+            fi
+            ((agents_skipped++)) || true
+        fi
+
+        # CRITICAL: Process spawns IMMEDIATELY after Weaver finishes
+        # This enables parallel work alongside Djinn instead of after
+        if [[ "$agent" == "weaver" ]]; then
+            local queue_size=$(jq 'length' "$PANTHEON_STATE_DIR/spawn_queue.json" 2>/dev/null || echo 0)
+            if [[ $queue_size -gt 0 ]]; then
+                log_info "Processing $queue_size spawns IN PARALLEL with upcoming agents..."
+                # Launch spawns in background - they run ALONGSIDE Djinn
+                process_spawn_queue &
+                SPAWN_PID=$!
+                log_info "Spawn processing started in background (PID: $SPAWN_PID)"
+            fi
+        fi
+    done
+
+    # Wait for any background spawn processing to complete
+    if [[ -n "${SPAWN_PID:-}" ]]; then
+        log_info "Waiting for parallel spawn workers to complete..."
+        wait $SPAWN_PID 2>/dev/null || true
+        log_success "Parallel spawn processing complete"
+    fi
+
+    # -------------------------------------------------------------------------
+    # SPAWN PROCESSING (for any remaining in queue)
+    # -------------------------------------------------------------------------
+    local spawns_before=$(jq 'length' "$PANTHEON_STATE_DIR/spawn_queue.json" 2>/dev/null || echo 0)
+    if [[ $spawns_before -gt 0 ]]; then
+        log_info "Processing $spawns_before remaining spawns..."
+        process_spawn_queue
+    fi
+    local spawns_after=$(jq 'length' "$PANTHEON_STATE_DIR/spawn_queue.json" 2>/dev/null || echo 0)
+    local spawns_processed=$((spawns_before - spawns_after))
     
-    # Phase 6: SCRIBE - Documentation and recording
-    run_agent "scribe" "Document changes, record decisions, update manifests"
+    # -------------------------------------------------------------------------
+    # CYCLE METRICS
+    # -------------------------------------------------------------------------
+    local cycle_end=$(date +%s)
+    local duration=$((cycle_end - cycle_start))
+    log_cycle_metrics "$cycle" "$agents_run" "$agents_skipped" "$spawns_processed" "$duration"
     
-    # Phase 7: CROCODILE - Compaction and state management (ALWAYS LAST)
-    run_agent "crocodile" "Compact state, garbage collect, persist critical data"
-    
-    # Process any spawned subagents
-    process_spawn_queue
-    
-    # Check completion
+    # -------------------------------------------------------------------------
+    # COMPLETION CHECK
+    # -------------------------------------------------------------------------
     if check_completion; then
-        log_success "PROJECT COMPLETE"
+        log_success "Project marked COMPLETE by Luminary"
         return 0
     fi
     
     return 1
 }
 
-run_agent() {
-    local agent_name=$1
-    local directive=$2
-    
-    log_agent "$agent_name" "ACTIVATING"
-    
-    # Build context for agent
-    local context_file="$PANTHEON_ROOT/state/context_${agent_name}.md"
-    build_agent_context "$agent_name" "$directive" > "$context_file"
-    
-    # Execute agent via Claude Code
-    local response_file="$PANTHEON_ROOT/state/response_${agent_name}.md"
-    
-    # The actual Claude Code invocation
-    # --dangerously-skip-permissions enables fully autonomous operation
-    # Use timeout to prevent hangs, and optionally a faster model via PANTHEON_MODEL env var
-    local model_flag=""
-    if [[ -n "${PANTHEON_MODEL:-}" ]]; then
-        model_flag="--model $PANTHEON_MODEL"
-    fi
-
-    # Increased timeout to 10 minutes - agents need time for complex autonomous work
-    local exit_code=0
-    timeout "${PANTHEON_TIMEOUT:-600}" claude --dangerously-skip-permissions --print $model_flag \
-        --system-prompt "$(cat "$PANTHEON_ROOT/agents/${agent_name}.md")" \
-        < "$context_file" > "$response_file" 2>/dev/null || exit_code=$?
-
-    # Check if timeout occurred (exit code 124)
-    if [[ $exit_code -eq 124 ]]; then
-        log_warning "Agent $agent_name timed out after ${PANTHEON_TIMEOUT:-600}s"
-    fi
-
-    # Check for rate limit in response
-    if grep -qiE "hit your limit|rate limit|resets at|too many requests" "$response_file" 2>/dev/null; then
-        log_error "Rate limit detected in $agent_name response"
-        echo "RATE_LIMITED" > "$PANTHEON_ROOT/state/rate_limit.flag"
-        return 1
-    fi
-
-    # Check for empty or very short response (sign of rate limiting or error)
-    local response_size=$(wc -c < "$response_file" 2>/dev/null || echo "0")
-    if [[ "$response_size" -lt 50 ]]; then
-        log_warning "Suspiciously short response from $agent_name ($response_size bytes)"
-    fi
-
-    # Process agent response
-    process_agent_response "$agent_name" "$response_file"
-
-    # Log completion
-    log_agent "$agent_name" "COMPLETE"
-}
-build_agent_context() {
-    local agent_name=$1
-    local directive=$2
-
-    cat << CONTEXT
-# OPERATING MODE: FULLY AUTONOMOUS
-
-You have full tool access. Use Read, Write, Bash, Grep, Glob, Task - whatever you need.
-Execute real commands. Create real files. Make real changes.
-
-When you need to communicate with other agents or signal state changes, ALSO emit markers:
-- [TASK]description[/TASK] - register a task on the board
-- [MSG:agent_name]content[/MSG] - async message to another agent
-- [SPAWN]specialization:task[/SPAWN] - request subagent (Weaver/Djinn only)
-- [ARTIFACT:path]description[/ARTIFACT] - register an artifact you created
-- [COMPLETE] - signal your phase is done
-
-These markers are for orchestration. They don't replace actual work - do the work FIRST, then emit markers to record what you did.
-
-# DIRECTIVE
-$directive
-
-# DISTILL DIRECTIVE (if active)
-$(if [[ -f "$PANTHEON_ROOT/state/distill_directive.md" ]]; then cat "$PANTHEON_ROOT/state/distill_directive.md"; else echo "No distill mode active."; fi)
-
-# PROJECT ROOT
-$PANTHEON_ROOT
-
-# WORKING DIRECTORIES
-- Source: $PANTHEON_ROOT/../src (or as defined in project brief)
-- Output: $PANTHEON_ROOT/output
-- State: $PANTHEON_ROOT/state
-
-# CURRENT STATE
-$(cat "$PANTHEON_ROOT/state/project_state.md" 2>/dev/null || echo "No project state yet.")
-
-# TASK BOARD
-$(cat "$PANTHEON_ROOT/state/task_board.json")
-
-# MESSAGES FOR YOU
-$(get_messages_for "$agent_name")
-
-# ARTIFACTS REGISTRY
-$(cat "$PANTHEON_ROOT/state/artifacts.json")
-
-# YOUR PREVIOUS OUTPUT (for continuity)
-$(tail -100 "$PANTHEON_ROOT/state/response_${agent_name}.md" 2>/dev/null || echo "First cycle.")
-
-CONTEXT
-}
-
-process_agent_response() {
-    local agent_name=$1
-    local response_file=$2
-    
-    # Extract structured outputs from response
-    # Agents output in a specific format with markers
-    
-    if [[ -f "$response_file" ]]; then
-        # Extract tasks
-        grep -oP '(?<=\[TASK\]).*(?=\[/TASK\])' "$response_file" 2>/dev/null | while read task; do
-            add_task "$task" "$agent_name"
-        done
-        
-        # Extract messages
-        grep -oP '(?<=\[MSG:)[^]]+(?=\]).*(?=\[/MSG\])' "$response_file" 2>/dev/null | while read msg; do
-            local target=$(echo "$msg" | cut -d']' -f1)
-            local content=$(echo "$msg" | cut -d']' -f2-)
-            send_message "$agent_name" "$target" "$content"
-        done
-        
-        # Extract spawn requests (only weaver and djinn)
-        if [[ "$agent_name" == "weaver" || "$agent_name" == "djinn" ]]; then
-            grep -oP '(?<=\[SPAWN\]).*(?=\[/SPAWN\])' "$response_file" 2>/dev/null | while read spawn; do
-                queue_spawn "$agent_name" "$spawn"
-            done
-        fi
-        
-        # Extract artifacts
-        grep -oP '(?<=\[ARTIFACT:)[^]]+(?=\])' "$response_file" 2>/dev/null | while read artifact; do
-            register_artifact "$artifact" "$agent_name"
-        done
-        
-        # Extract completion signals
-        if grep -q '\[COMPLETE\]' "$response_file" 2>/dev/null; then
-            mark_agent_complete "$agent_name"
-        fi
-    fi
-}
-
-process_spawn_queue() {
-    local spawn_queue="$PANTHEON_ROOT/state/spawn_queue.json"
-    
-    if [[ -f "$spawn_queue" ]] && [[ "$(cat "$spawn_queue")" != "[]" ]]; then
-        log_info "Processing spawn queue..."
-        
-        # Process each spawn request
-        jq -r '.[] | @base64' "$spawn_queue" 2>/dev/null | while read spawn_b64; do
-            local spawn_data=$(echo "$spawn_b64" | base64 -d)
-            local parent=$(echo "$spawn_data" | jq -r '.parent')
-            local task=$(echo "$spawn_data" | jq -r '.task')
-            local specialization=$(echo "$spawn_data" | jq -r '.specialization')
-            
-            spawn_subagent "$parent" "$task" "$specialization"
-        done
-        
-        # Clear queue
-        echo "[]" > "$spawn_queue"
-    fi
-}
-
 check_completion() {
-    # Check if all critical tasks are done
-    local pending=$(jq '[.[] | select(.status == "pending" or .status == "in_progress")] | length' \
-        "$PANTHEON_ROOT/state/task_board.json" 2>/dev/null || echo "999")
-    
-    if [[ "$pending" == "0" ]]; then
-        # Verify with Luminary
-        local luminary_complete=$(jq -r '.luminary.complete // false' \
-            "$PANTHEON_ROOT/state/agent_status.json" 2>/dev/null)
-        
-        [[ "$luminary_complete" == "true" ]]
+    # Check if Luminary has declared completion
+    local luminary_complete=$(jq -r '.luminary.complete // "false"' \
+        "$PANTHEON_STATE_DIR/agent_status.json" 2>/dev/null)
+
+    if [[ "$luminary_complete" == "true" ]]; then
+        log_info "Luminary declared [COMPLETE] - running mandatory verification..."
+
+        # =====================================================================
+        # MANDATORY QUALITY GATE - NO HALF-FINISHED PRODUCTS
+        # =====================================================================
+        # This gate CANNOT be bypassed. A project is NOT complete until:
+        # 1. It builds
+        # 2. Tests compile and pass
+        # 3. Core features actually work (not stubs/unimplemented)
+        # 4. No critical tasks remain
+        # =====================================================================
+
+        local gate_failures=0
+        local failure_reasons=""
+
+        # -------------------------------------------------------------------------
+        # CHECK 1: No critical/high tasks pending
+        # -------------------------------------------------------------------------
+        local critical_pending=$(jq '[.[] | select(.status=="pending") | select(.priority=="critical" or .priority=="high")] | length' \
+            "$PANTHEON_STATE_DIR/task_board.json" 2>/dev/null || echo 0)
+
+        if [[ "$critical_pending" != "0" ]]; then
+            log_warning "GATE FAILED: $critical_pending critical/high tasks still pending"
+            failure_reasons="${failure_reasons}\n- $critical_pending critical/high priority tasks not complete"
+            ((gate_failures++))
+        fi
+
+        # -------------------------------------------------------------------------
+        # CHECK 2: Build verification (must compile)
+        # -------------------------------------------------------------------------
+        log_info "Running build verification..."
+        if ! verify_build > "$PANTHEON_LOGS_DIR/build_verification.log" 2>&1; then
+            log_warning "GATE FAILED: Build does not compile"
+            failure_reasons="${failure_reasons}\n- Build failed (see logs/build_verification.log)"
+            ((gate_failures++))
+        fi
+
+        # -------------------------------------------------------------------------
+        # CHECK 3: Test compilation (tests must at least compile)
+        # -------------------------------------------------------------------------
+        log_info "Running test compilation check..."
+        local test_compile_output=""
+        local test_compile_ok=true
+
+        local project_dir=$(get_project_dir)
+        local build_system=$(detect_build_system)
+
+        case "$build_system" in
+            rust)
+                test_compile_output=$(cd "$project_dir" && cargo test --no-run 2>&1) || test_compile_ok=false
+                ;;
+            python)
+                test_compile_output=$(cd "$project_dir" && python -m py_compile tests/*.py 2>&1) || test_compile_ok=false
+                ;;
+            node)
+                # Node tests generally don't need pre-compilation
+                test_compile_ok=true
+                ;;
+        esac
+
+        if ! $test_compile_ok; then
+            log_warning "GATE FAILED: Tests don't compile"
+            echo "$test_compile_output" > "$PANTHEON_LOGS_DIR/test_compile.log"
+            failure_reasons="${failure_reasons}\n- Tests don't compile (see logs/test_compile.log)"
+            ((gate_failures++))
+        fi
+
+        # -------------------------------------------------------------------------
+        # CHECK 4: Quality gate (no stubs, features work)
+        # -------------------------------------------------------------------------
+        log_info "Running quality gate..."
+        source "$PANTHEON_ROOT/lib/quality.sh"
+
+        if ! run_quality_gate > "$PANTHEON_LOGS_DIR/quality_gate_output.log" 2>&1; then
+            log_warning "GATE FAILED: Quality gate did not pass"
+            failure_reasons="${failure_reasons}\n- Quality gate failed (see logs/quality_gate.log)"
+            ((gate_failures++))
+        fi
+
+        # -------------------------------------------------------------------------
+        # CHECK 5: Full verification (build + tests + smoke)
+        # -------------------------------------------------------------------------
+        log_info "Running full verification pipeline..."
+        if ! run_full_verification > "$PANTHEON_LOGS_DIR/verification_output.log" 2>&1; then
+            log_warning "GATE FAILED: Full verification did not pass"
+            failure_reasons="${failure_reasons}\n- Verification failed (see logs/verification_output.log)"
+            ((gate_failures++))
+        fi
+
+        # =========================================================================
+        # GATE DECISION
+        # =========================================================================
+        if [[ $gate_failures -gt 0 ]]; then
+            log_error "=========================================="
+            log_error "COMPLETION REJECTED: $gate_failures gate(s) failed"
+            log_error "=========================================="
+            echo -e "$failure_reasons" | while read -r reason; do
+                [[ -n "$reason" ]] && log_warning "  $reason"
+            done
+
+            # Reset Luminary's complete flag - project is NOT done
+            local updated=$(jq '.luminary.complete = "false"' \
+                "$PANTHEON_STATE_DIR/agent_status.json")
+            echo "$updated" > "$PANTHEON_STATE_DIR/agent_status.json"
+
+            # Send detailed failure message to Luminary
+            send_message "orchestrator" "luminary" \
+                "COMPLETION REJECTED - $gate_failures quality gates failed. Project is NOT complete. Failures:$failure_reasons\n\nDo NOT declare [COMPLETE] again until all issues are fixed. Direct agents to fix the issues." \
+                "urgent"
+
+            # Also notify Doctor about test/quality issues
+            send_message "orchestrator" "doctor" \
+                "QUALITY GATE FAILED - Tests don't compile or quality checks failed. Review logs/test_compile.log and logs/quality_gate.log. Fix test compilation errors and any unimplemented features." \
+                "urgent"
+
+            # Store gate results for agents to see
+            cat > "$PANTHEON_STATE_DIR/gate_results.json" << EOF
+{
+    "timestamp": "$(date -Iseconds)",
+    "luminary_declared_complete": true,
+    "gate_passed": false,
+    "failures": $gate_failures,
+    "reasons": "$(echo -e "$failure_reasons" | tr '\n' '|')"
+}
+EOF
+
+            return 1
+        fi
+
+        # All gates passed!
+        log_success "=========================================="
+        log_success "ALL QUALITY GATES PASSED"
+        log_success "=========================================="
+        log_success "Project is genuinely complete and verified"
+
+        cat > "$PANTHEON_STATE_DIR/gate_results.json" << EOF
+{
+    "timestamp": "$(date -Iseconds)",
+    "luminary_declared_complete": true,
+    "gate_passed": true,
+    "failures": 0,
+    "reasons": ""
+}
+EOF
+
+        return 0
     else
         return 1
     fi
 }
 
-# ============================================================================
+# =============================================================================
 # MAIN ENTRY POINT
-# ============================================================================
+# =============================================================================
 
 main() {
     local project_brief="$1"
-    local max_cycles="${2:-10}"
+    local max_cycles="${2:-$MAX_CYCLES}"
     local resume_mode=false
     local start_cycle=1
-
+    
     # Parse arguments
     if [[ "$1" == "--resume" ]]; then
         resume_mode=true
-        max_cycles="${2:-10}"
+        max_cycles="${2:-5}"
         shift 2 || true
     fi
-
+    
+    # Validate arguments
     if [[ "$resume_mode" == false && -z "$project_brief" ]]; then
         echo "Usage: $0 <project_brief_file> [max_cycles]"
-        echo "       $0 --resume [max_cycles]"
-        echo "       $0 --interactive"
+        echo "       $0 --resume [additional_cycles]"
         exit 1
     fi
-
+    
+    # -------------------------------------------------------------------------
+    # RESUME MODE
+    # -------------------------------------------------------------------------
     if [[ "$resume_mode" == true ]]; then
-        # RESUME MODE: Skip initialization, use existing state
         log_header "RESUMING PANTHEON"
-
-        # Verify state exists
-        if [[ ! -f "$PANTHEON_ROOT/state/project_state.md" ]]; then
-            echo "Error: No existing state to resume from"
-            echo "Run with a project brief first."
+        
+        if [[ ! -f "$PANTHEON_STATE_DIR/project_state.md" ]]; then
+            log_error "No existing state to resume from"
             exit 1
         fi
-
-        # Get the last cycle number and continue from there
-        start_cycle=$(cat "$PANTHEON_ROOT/state/cycle_count" 2>/dev/null || echo "1")
-
-        # In resume mode, max_cycles is relative (add to current cycle)
-        # e.g., if at cycle 10 and request 2 more cycles, run cycles 10-12
+        
+        start_cycle=$(cat "$PANTHEON_STATE_DIR/cycle_count" 2>/dev/null || echo 1)
         max_cycles=$((start_cycle + max_cycles))
-
-        log_info "Resuming from cycle $start_cycle (running until cycle $max_cycles)"
-
-        # Clear rate limit flags if any
-        rm -f "$PANTHEON_ROOT/state/rate_limit.flag" 2>/dev/null || true
-
-        # Don't reinitialize - just source libs
-        source "$PANTHEON_ROOT/lib/colors.sh"
-        source "$PANTHEON_ROOT/lib/logging.sh"
-        source "$PANTHEON_ROOT/lib/state.sh"
-        source "$PANTHEON_ROOT/lib/messaging.sh"
-        source "$PANTHEON_ROOT/lib/spawner.sh"
-
-        log_success "State loaded, continuing..."
+        
+        # Clear rate limit flag
+        rm -f "$PANTHEON_STATE_DIR/rate_limit.flag" 2>/dev/null || true
+        
+        log_info "Resuming from cycle $start_cycle (running until $max_cycles)"
+        
+    # -------------------------------------------------------------------------
+    # FRESH START
+    # -------------------------------------------------------------------------
     else
-        # FRESH START: Initialize everything
         init_pantheon
-
+        
         # Load project brief
         if [[ "$project_brief" == "--interactive" ]]; then
             echo "Enter project brief (Ctrl+D when done):"
             project_brief=$(cat)
-            echo "$project_brief" > "$PANTHEON_ROOT/state/project_brief.md"
+            echo "$project_brief" > "$PANTHEON_STATE_DIR/project_brief.md"
         elif [[ -f "$project_brief" ]]; then
-            cp "$project_brief" "$PANTHEON_ROOT/state/project_brief.md"
+            cp "$project_brief" "$PANTHEON_STATE_DIR/project_brief.md"
         else
-            echo "$project_brief" > "$PANTHEON_ROOT/state/project_brief.md"
+            echo "$project_brief" > "$PANTHEON_STATE_DIR/project_brief.md"
         fi
-
+        
         # Initialize project state
-        cat > "$PANTHEON_ROOT/state/project_state.md" << STATE
+        cat > "$PANTHEON_STATE_DIR/project_state.md" << STATE
 # PROJECT STATE
 
 ## Brief
-$(cat "$PANTHEON_ROOT/state/project_brief.md")
+$(cat "$PANTHEON_STATE_DIR/project_brief.md")
 
 ## Status
 INITIALIZING
@@ -689,39 +769,101 @@ INITIALIZING
 - [ ] Delivery
 STATE
     fi
+    
+    # -------------------------------------------------------------------------
+    # MAIN EXECUTION LOOP
+    # -------------------------------------------------------------------------
+    local project_complete=false
+    local consecutive_gate_failures=0
+    local max_gate_failures="${PANTHEON_MAX_GATE_FAILURES:-5}"  # Max attempts before giving up
+    local auto_extend_cycles="${PANTHEON_AUTO_EXTEND:-true}"     # Auto-extend on gate failure
 
-    # Main execution loop
     for ((cycle=start_cycle; cycle<=max_cycles; cycle++)); do
-        echo "$cycle" > "$PANTHEON_ROOT/state/cycle_count"
+        echo "$cycle" > "$PANTHEON_STATE_DIR/cycle_count"
+        echo "$cycle" > "$PANTHEON_STATE_DIR/cycle_count" 2>/dev/null || true
 
-        if run_cycle "$cycle" "$max_cycles"; then
+        # CRITICAL: Protect run_cycle from set -e
+        # run_cycle returns 0=complete, 1=continue, 2=rate_limit
+        # Without || true, set -e exits on return 1
+        local cycle_result=0
+        run_cycle "$cycle" "$max_cycles" || cycle_result=$?
+
+        log_info "Cycle $cycle returned: $cycle_result"
+
+        if [[ $cycle_result -eq 0 ]]; then
+            project_complete=true
+            log_info "Breaking - project complete and verified"
             break
-        fi
-
-        # Check for rate limit flag (set by run_agent)
-        if [[ -f "$PANTHEON_ROOT/state/rate_limit.flag" ]]; then
+        elif [[ $cycle_result -eq 2 ]]; then
+            # Rate limit - exit gracefully
             log_error "Rate limit detected - pausing orchestrator"
-            log_info "Resume with: $0 --resume $max_cycles"
+            log_info "Resume with: $0 --resume $((max_cycles - cycle))"
             exit 2
         fi
 
+        # =====================================================================
+        # AUTO-EXTENSION: Don't give up if verification keeps failing
+        # =====================================================================
+        # Check if we're near the end but verification is failing
+        if [[ $cycle -ge $((max_cycles - 1)) ]]; then
+            local gate_result=$(jq -r '.gate_passed // "true"' "$PANTHEON_STATE_DIR/gate_results.json" 2>/dev/null)
+
+            if [[ "$gate_result" == "false" ]]; then
+                ((consecutive_gate_failures++))
+
+                if [[ "$auto_extend_cycles" == "true" ]] && [[ $consecutive_gate_failures -lt $max_gate_failures ]]; then
+                    log_warning "=========================================="
+                    log_warning "QUALITY GATE FAILED - EXTENDING CYCLES"
+                    log_warning "=========================================="
+                    log_warning "Gate failure $consecutive_gate_failures of $max_gate_failures"
+                    log_warning "Adding 2 more cycles to fix issues..."
+
+                    # Extend max_cycles
+                    max_cycles=$((max_cycles + 2))
+
+                    # Notify Luminary about the extension
+                    send_message "orchestrator" "luminary" \
+                        "CYCLES EXTENDED: Quality gate failed, cycles extended to $max_cycles. DO NOT declare [COMPLETE] until issues are fixed." \
+                        "urgent"
+                else
+                    log_error "=========================================="
+                    log_error "MAX GATE FAILURES REACHED ($max_gate_failures)"
+                    log_error "=========================================="
+                    log_error "Project cannot pass quality gates after $consecutive_gate_failures attempts"
+                    log_error "Manual intervention required"
+                fi
+            else
+                # Reset failure counter on success
+                consecutive_gate_failures=0
+            fi
+        fi
+
+        log_info "Continuing to cycle $((cycle + 1))..."
         # Brief pause between cycles
         sleep 1
     done
     
-    # Final synthesis
-    log_header "FINAL SYNTHESIS"
-    run_agent "luminary" "Produce final synthesis and deliverables manifest"
-    run_agent "scribe" "Produce final documentation package"
-    run_agent "crocodile" "Final state compaction and archive"
+    # -------------------------------------------------------------------------
+    # FINAL SYNTHESIS
+    # -------------------------------------------------------------------------
+    if [[ "$project_complete" == true ]]; then
+        log_header "FINAL SYNTHESIS"
+        
+        run_agent "luminary" "Produce final synthesis and deliverables manifest"
+        run_agent "scribe" "Produce final documentation package"
+        run_agent "crocodile" "Final state compaction and archive"
+        
+        log_success "PANTHEON COMPLETE"
+    else
+        log_warning "Max cycles reached without completion"
+        log_info "Resume with: $0 --resume [cycles]"
+    fi
     
-    log_success "PANTHEON COMPLETE"
-    
-    # Output deliverables location
+    # Output summary
     echo ""
-    echo "Deliverables: $PANTHEON_ROOT/output/"
-    echo "Logs: $PANTHEON_ROOT/logs/"
-    echo "Final State: $PANTHEON_ROOT/state/"
+    echo "Project: $PANTHEON_PROJECTS_DIR/"
+    echo "Logs: $PANTHEON_LOGS_DIR/"
+    echo "State: $PANTHEON_STATE_DIR/"
 }
 
 # Run if executed directly

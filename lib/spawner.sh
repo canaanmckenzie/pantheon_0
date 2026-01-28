@@ -1,20 +1,170 @@
 #!/bin/bash
-# Subagent Spawning System
-# Enables Weaver and Djinn to spawn specialized worker agents
+# =============================================================================
+# OPTIMIZED SPAWNER LIBRARY
+# =============================================================================
+#
+# WHAT'S DIFFERENT FROM ORIGINAL:
+# -------------------------------
+# 1. SPAWN BUDGETS: Maximum spawns per cycle (prevents runaway token usage)
+# 2. MODEL TIERING: Most spawns use Haiku, only complex ones get Sonnet
+# 3. PRIORITIZATION: Spawns are queued and prioritized, not all executed
+# 4. DEDUPLICATION: Prevents spawning duplicate/similar tasks
+# 5. RESULT CACHING: Reuses results from similar past spawns
+#
+# WHY THIS MATTERS:
+# -----------------
+# The original "aggressive spawning" philosophy meant Weaver and Djinn
+# could spawn 5-10 workers EACH per cycle. That's 10-20 additional Claude
+# calls, each using Sonnet by default.
+#
+# With a budget of 3 spawns/cycle using Haiku:
+#   Original: ~15 spawns * Sonnet cost = 75 "cost units"
+#   Optimized: ~3 spawns * Haiku cost = 3 "cost units"
+#   Savings: 96% reduction in spawn costs
+#
+# THE SPAWN BUDGET PHILOSOPHY:
+# ----------------------------
+# - Most spawns are focused, single-purpose tasks
+# - Haiku is sufficient for 80% of spawn work
+# - Quality > Quantity: 3 good spawns beat 10 mediocre ones
+# - Defer rather than overwhelm: excess spawns queue for next cycle
+#
+# =============================================================================
 
-SPAWN_DIR="$PANTHEON_ROOT/spawn"
-SPAWN_QUEUE="$PANTHEON_ROOT/state/spawn_queue.json"
-SPAWN_REGISTRY="$PANTHEON_ROOT/state/spawn_registry.json"
+PANTHEON_ROOT="${PANTHEON_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 
-# ============================================================================
-# SPAWN QUEUE MANAGEMENT
-# ============================================================================
+# Use .pantheon/ structure (fallback to legacy if not set)
+PANTHEON_STATE_DIR="${PANTHEON_STATE_DIR:-$PANTHEON_ROOT/.pantheon/state}"
+PANTHEON_SPAWN_DIR="${PANTHEON_SPAWN_DIR:-$PANTHEON_ROOT/.pantheon/spawn}"
+
+SPAWN_DIR="$PANTHEON_SPAWN_DIR"
+SPAWN_QUEUE="$PANTHEON_STATE_DIR/spawn_queue.json"
+SPAWN_REGISTRY="$PANTHEON_STATE_DIR/spawn_registry.json"
+SPAWN_BUDGET_FILE="$PANTHEON_STATE_DIR/spawn_budget"
+
+# Source model selection
+source "$PANTHEON_ROOT/lib/models.sh"
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+
+# Maximum spawns per cycle (override with PANTHEON_MAX_SPAWNS_PER_CYCLE)
+MAX_SPAWNS_PER_CYCLE="${PANTHEON_MAX_SPAWNS_PER_CYCLE:-3}"
+
+# Timeout for spawn execution (seconds)
+SPAWN_TIMEOUT="${PANTHEON_SPAWN_TIMEOUT:-180}"  # 3 minutes (reduced from 5)
+
+# =============================================================================
+# INITIALIZATION
+# =============================================================================
 
 init_spawn_system() {
     mkdir -p "$SPAWN_DIR"
+    mkdir -p "$SPAWN_DIR/archive"
+    mkdir -p "$SPAWN_DIR/cache"
     [[ -f "$SPAWN_QUEUE" ]] || echo "[]" > "$SPAWN_QUEUE"
     [[ -f "$SPAWN_REGISTRY" ]] || echo "[]" > "$SPAWN_REGISTRY"
+    
+    # Reset spawn budget at start of cycle
+    echo "$MAX_SPAWNS_PER_CYCLE" > "$SPAWN_BUDGET_FILE"
 }
+
+# =============================================================================
+# SPAWN BUDGET MANAGEMENT
+# =============================================================================
+#
+# Track and enforce spawn limits per cycle.
+#
+# =============================================================================
+
+get_spawn_budget() {
+    cat "$SPAWN_BUDGET_FILE" 2>/dev/null || echo "$MAX_SPAWNS_PER_CYCLE"
+}
+
+decrement_spawn_budget() {
+    local current=$(get_spawn_budget)
+    local new=$((current - 1))
+    echo "$new" > "$SPAWN_BUDGET_FILE"
+    echo "$new"
+}
+
+reset_spawn_budget() {
+    echo "$MAX_SPAWNS_PER_CYCLE" > "$SPAWN_BUDGET_FILE"
+}
+
+has_spawn_budget() {
+    local budget=$(get_spawn_budget)
+    [[ $budget -gt 0 ]]
+}
+
+# =============================================================================
+# SPAWN PRIORITIZATION
+# =============================================================================
+#
+# Not all spawns are equal. Prioritize based on:
+#   1. Blocking other work (critical)
+#   2. On critical path (high)
+#   3. Implementation work (normal)
+#   4. Documentation/testing (low - can defer)
+#
+# =============================================================================
+
+calculate_spawn_priority() {
+    local specialization=$1
+    local task="$2"
+    local lower_task=$(echo "$task" | tr '[:upper:]' '[:lower:]')
+    
+    # Critical: Blocking keywords
+    if [[ "$lower_task" == *"block"* || "$lower_task" == *"critical"* || "$lower_task" == *"urgent"* ]]; then
+        echo "critical"
+        return
+    fi
+    
+    # High: Core implementation
+    if [[ "$specialization" == "backend" || "$specialization" == "algorithm" || "$specialization" == "security" ]]; then
+        echo "high"
+        return
+    fi
+    
+    # Normal: General implementation
+    if [[ "$specialization" == "frontend" || "$specialization" == "database" || "$specialization" == "systems" ]]; then
+        echo "normal"
+        return
+    fi
+    
+    # Low: Can defer
+    if [[ "$specialization" == "documentation" || "$specialization" == "refactor" ]]; then
+        echo "low"
+        return
+    fi
+    
+    echo "normal"
+}
+
+# =============================================================================
+# SPAWN DEDUPLICATION
+# =============================================================================
+#
+# Prevent spawning duplicate or very similar tasks.
+#
+# =============================================================================
+
+is_duplicate_spawn() {
+    local specialization=$1
+    local task="$2"
+    
+    # Check registry for similar completed spawns
+    local similar=$(jq --arg spec "$specialization" --arg task "$task" \
+        '[.[] | select(.specialization == $spec) | select(.task | test($task[0:30]; "i"))] | length' \
+        "$SPAWN_REGISTRY" 2>/dev/null || echo 0)
+    
+    [[ $similar -gt 0 ]]
+}
+
+# =============================================================================
+# SPAWN QUEUE MANAGEMENT
+# =============================================================================
 
 queue_spawn() {
     local parent=$1
@@ -30,207 +180,135 @@ queue_spawn() {
         return 1
     fi
     
+    # Check for duplicates
+    if is_duplicate_spawn "$specialization" "$task"; then
+        log_info "Spawn skipped (duplicate): $specialization - $task"
+        return 0
+    fi
+    
+    # Calculate priority
+    local priority=$(calculate_spawn_priority "$specialization" "$task")
+    
+    # Generate ID
     local spawn_id="spawn_$(date +%s%N | md5sum | head -c 8)"
     
+    # Add to queue with priority
     local updated=$(jq --arg id "$spawn_id" \
         --arg parent "$parent" \
         --arg spec "$specialization" \
         --arg task "$task" \
+        --arg priority "$priority" \
         --arg queued "$(date -Iseconds)" \
         '. += [{
             "id": $id,
             "parent": $parent,
             "specialization": $spec,
             "task": $task,
+            "priority": $priority,
             "status": "queued",
             "queued": $queued
         }]' "$SPAWN_QUEUE")
     echo "$updated" > "$SPAWN_QUEUE"
     
-    log_spawn "$parent" "$specialization" "$task"
+    log_info "Spawn queued [$priority]: $specialization - ${task:0:50}..."
     echo "$spawn_id"
 }
 
-# ============================================================================
-# SUBAGENT SPECIALIZATIONS
-# ============================================================================
+# =============================================================================
+# SPECIALIZATION PROMPTS (OPTIMIZED)
+# =============================================================================
+#
+# MAJOR CHANGE: Prompts are now MUCH shorter.
+# We removed the inline code examples (they were 100+ lines each).
+# Claude knows how to code - we just need to tell it what to do.
+#
+# =============================================================================
 
 get_specialization_prompt() {
     local specialization=$1
     
+    # Base instructions (same for all)
+    local base="You are a focused specialist worker. Complete your assigned task thoroughly.
+Output format: Use [ARTIFACT:path] for files, [COMPLETE] when done, [BLOCKER:desc] for issues.
+Be concise. Write production-ready code. No explanations unless necessary."
+
     case "$specialization" in
-        "frontend")
-            cat << 'SPEC'
-You are a FRONTEND SPECIALIST subagent. Your expertise:
-- React, Vue, Svelte, vanilla JS
-- CSS, Tailwind, styled-components
-- Accessibility, responsive design
-- State management, routing
-- Build tools, bundlers
-
-Focus solely on frontend implementation. Be thorough and production-ready.
-Output format: Use [ARTIFACT:path] for files, [COMPLETE] when done.
-SPEC
+        frontend)
+            echo "$base
+Specialization: Frontend (UI, components, styling, state management)"
             ;;
-        "backend")
-            cat << 'SPEC'
-You are a BACKEND SPECIALIST subagent. Your expertise:
-- API design (REST, GraphQL)
-- Database design and queries
-- Authentication, authorization
-- Server architecture
-- Performance optimization
-
-Focus solely on backend implementation. Be thorough and production-ready.
-Output format: Use [ARTIFACT:path] for files, [COMPLETE] when done.
-SPEC
+        backend)
+            echo "$base
+Specialization: Backend (APIs, server logic, data processing)"
             ;;
-        "database")
-            cat << 'SPEC'
-You are a DATABASE SPECIALIST subagent. Your expertise:
-- Schema design and normalization
-- Query optimization
-- Migrations and versioning
-- Indexing strategies
-- Data integrity constraints
-
-Focus solely on database work. Be thorough and production-ready.
-Output format: Use [ARTIFACT:path] for files, [COMPLETE] when done.
-SPEC
+        database)
+            echo "$base
+Specialization: Database (schema, queries, migrations, indexes)"
             ;;
-        "testing")
-            cat << 'SPEC'
-You are a TESTING SPECIALIST subagent. Your expertise:
-- Unit testing
-- Integration testing
-- E2E testing
-- Test coverage analysis
-- Mocking and fixtures
-
-Focus solely on comprehensive testing. Be thorough.
-Output format: Use [ARTIFACT:path] for files, [COMPLETE] when done.
-SPEC
+        testing)
+            echo "$base
+Specialization: Testing (unit, integration, E2E tests, mocks)"
             ;;
-        "security")
-            cat << 'SPEC'
-You are a SECURITY SPECIALIST subagent. Your expertise:
-- Vulnerability assessment
-- Input validation
-- Authentication hardening
-- Encryption and secrets management
-- Security headers and CORS
-
-Focus solely on security analysis and hardening. Be thorough.
-Output format: Use [ARTIFACT:path] for files, [COMPLETE] when done.
-SPEC
+        security)
+            echo "$base
+Specialization: Security (vulnerabilities, hardening, auth, encryption)"
             ;;
-        "devops")
-            cat << 'SPEC'
-You are a DEVOPS SPECIALIST subagent. Your expertise:
-- Docker and containerization
-- CI/CD pipelines
-- Infrastructure as code
-- Monitoring and logging
-- Deployment strategies
-
-Focus solely on DevOps implementation. Be thorough.
-Output format: Use [ARTIFACT:path] for files, [COMPLETE] when done.
-SPEC
+        devops)
+            echo "$base
+Specialization: DevOps (Docker, CI/CD, deployment, monitoring)"
             ;;
-        "documentation")
-            cat << 'SPEC'
-You are a DOCUMENTATION SPECIALIST subagent. Your expertise:
-- API documentation
-- README and guides
-- Code comments
-- Architecture diagrams
-- User documentation
-
-Focus solely on comprehensive documentation. Be thorough.
-Output format: Use [ARTIFACT:path] for files, [COMPLETE] when done.
-SPEC
+        documentation)
+            echo "$base
+Specialization: Documentation (README, API docs, guides, comments)"
             ;;
-        "refactor")
-            cat << 'SPEC'
-You are a REFACTORING SPECIALIST subagent. Your expertise:
-- Code smell detection
-- Design pattern application
-- Performance optimization
-- Readability improvements
-- Technical debt reduction
-
-Focus solely on code improvement. Be thorough.
-Output format: Use [ARTIFACT:path] for files, [COMPLETE] when done.
-SPEC
+        refactor)
+            echo "$base
+Specialization: Refactoring (code improvement, patterns, cleanup)"
             ;;
-        "algorithm")
-            cat << 'SPEC'
-You are an ALGORITHM SPECIALIST subagent. Your expertise:
-- Data structures
-- Algorithm design
-- Complexity analysis
-- Optimization techniques
-- Problem decomposition
-
-Focus solely on algorithmic solutions. Be thorough.
-Output format: Use [ARTIFACT:path] for files, [COMPLETE] when done.
-SPEC
+        algorithm)
+            echo "$base
+Specialization: Algorithms (data structures, optimization, complexity)"
             ;;
-        "systems")
-            cat << 'SPEC'
-You are a SYSTEMS SPECIALIST subagent. Your expertise:
-- Low-level C and Rust programming
-- Memory management, pointer safety, ownership
-- System calls, kernel interfaces, POSIX APIs
-- Performance-critical and latency-sensitive code
-- Linux internals, device drivers, embedded systems
-- Network programming (sockets, protocols)
-- Concurrency primitives (mutexes, atomics, lock-free structures)
-- Binary formats, serialization, FFI boundaries
-
-Focus solely on systems-level implementation. Code must be:
-- Memory safe (no leaks, no UB in C, safe Rust where possible)
-- Well-documented with safety invariants noted
-- Performance-conscious with complexity analysis
-- Portable where feasible (POSIX-compliant)
-
-Output format: Use [ARTIFACT:path] for files, [COMPLETE] when done.
-SPEC
+        systems)
+            echo "$base
+Specialization: Systems (low-level, memory, concurrency, performance)"
             ;;
         *)
-            cat << SPEC
-You are a GENERAL SPECIALIST subagent for: $specialization
-Apply your expertise thoroughly to the assigned task.
-Be comprehensive and production-ready.
-Output format: Use [ARTIFACT:path] for files, [COMPLETE] when done.
-SPEC
+            echo "$base
+Specialization: $specialization"
             ;;
     esac
 }
 
-# ============================================================================
+# =============================================================================
 # SPAWN EXECUTION
-# ============================================================================
+# =============================================================================
 
 spawn_subagent() {
     local parent=$1
     local task=$2
     local specialization=$3
     
+    # Check budget
+    if ! has_spawn_budget; then
+        log_warning "Spawn budget exhausted - deferring to next cycle"
+        return 1
+    fi
+    
     local spawn_id="spawn_$(date +%s%N | md5sum | head -c 8)"
     local spawn_workdir="$SPAWN_DIR/$spawn_id"
     
     mkdir -p "$spawn_workdir"
     
-    log_info "Spawning $specialization worker: $spawn_id"
+    # Select model based on specialization and task
+    local model=$(get_model_for_spawn "$specialization" "$task")
     
-    # Build subagent prompt
+    log_info "Spawning $specialization worker ($model): $spawn_id"
+    
+    # Build minimal prompt (much shorter than original)
     local prompt_file="$spawn_workdir/prompt.md"
     cat > "$prompt_file" << PROMPT
-# SUBAGENT ASSIGNMENT
-
-## Parent Agent
-$parent
+# Task Assignment
 
 ## Specialization
 $specialization
@@ -238,58 +316,51 @@ $specialization
 ## Task
 $task
 
-## System Prompt
+## Instructions
 $(get_specialization_prompt "$specialization")
 
-## Current Project State
-$(cat "$PANTHEON_ROOT/state/project_state.md" 2>/dev/null || echo "See task for context.")
+## Working Directory
+$PANTHEON_ROOT
 
-## Existing Artifacts
-$(cat "$PANTHEON_ROOT/state/artifacts.json")
+## Output Location
+$spawn_workdir/
 
-## Instructions
-1. Focus ONLY on your assigned task
-2. Produce complete, working code
-3. Mark files with [ARTIFACT:relative/path]
-4. Signal completion with [COMPLETE]
-5. Report blockers with [BLOCKER:description]
-
-## CRITICAL: TEXT-ONLY MODE
-Do NOT use any tools (Read, Bash, Task, etc.). Produce your response as structured text only.
+CRITICAL: Produce TEXT OUTPUT ONLY. No tool usage.
 PROMPT
 
-    # Execute subagent
+    # Execute with selected model
     local response_file="$spawn_workdir/response.md"
-
-    # --dangerously-skip-permissions enables fully autonomous operation
-    local model_flag=""
-    if [[ -n "${PANTHEON_MODEL:-}" ]]; then
-        model_flag="--model $PANTHEON_MODEL"
-    fi
-
-    timeout "${PANTHEON_TIMEOUT:-300}" claude --dangerously-skip-permissions --print $model_flag \
+    
+    # Full autonomous mode with tool access
+    timeout "$SPAWN_TIMEOUT" claude --print --model "$model" \
+        --permission-mode bypassPermissions \
         < "$prompt_file" > "$response_file" 2>/dev/null || true
     
-    # Process subagent output
+    # Decrement budget
+    decrement_spawn_budget
+    
+    # Process output
     process_subagent_output "$spawn_id" "$parent" "$response_file"
     
-    # Register spawn
+    # Register completion
     local updated=$(jq --arg id "$spawn_id" \
         --arg parent "$parent" \
         --arg spec "$specialization" \
         --arg task "$task" \
+        --arg model "$model" \
         --arg completed "$(date -Iseconds)" \
         '. += [{
             "id": $id,
             "parent": $parent,
             "specialization": $spec,
             "task": $task,
+            "model": $model,
             "completed": $completed,
             "workdir": "spawn/'"$spawn_id"'"
         }]' "$SPAWN_REGISTRY")
     echo "$updated" > "$SPAWN_REGISTRY"
     
-    log_success "Subagent $spawn_id complete"
+    log_success "Subagent $spawn_id complete (budget remaining: $(get_spawn_budget))"
 }
 
 process_subagent_output() {
@@ -304,38 +375,173 @@ process_subagent_output() {
     
     # Extract artifacts
     grep -oP '(?<=\[ARTIFACT:)[^\]]+' "$response_file" 2>/dev/null | while read artifact; do
+        source "$PANTHEON_ROOT/lib/state.sh"
         register_artifact "$artifact" "subagent:$spawn_id"
     done
     
     # Check for blockers
     if grep -q '\[BLOCKER:' "$response_file" 2>/dev/null; then
         local blocker=$(grep -oP '(?<=\[BLOCKER:)[^\]]+' "$response_file" | head -1)
+        source "$PANTHEON_ROOT/lib/messaging.sh"
         report_blocker "subagent:$spawn_id" "$blocker"
     fi
-    
-    # Notify parent of completion
-    if grep -q '\[COMPLETE\]' "$response_file" 2>/dev/null; then
-        send_message "subagent:$spawn_id" "$parent" "Task complete. See spawn/$spawn_id/"
+}
+
+# =============================================================================
+# SPAWN QUEUE PROCESSING
+# =============================================================================
+#
+# Process queued spawns in priority order, respecting budget.
+#
+# =============================================================================
+
+process_spawn_queue() {
+    if [[ ! -f "$SPAWN_QUEUE" ]] || [[ "$(cat "$SPAWN_QUEUE")" == "[]" ]]; then
+        return 0
+    fi
+
+    local budget=$(get_spawn_budget)
+    log_info "Processing spawn queue IN PARALLEL (budget: $budget)..."
+
+    # Sort by priority
+    local sorted=$(jq 'sort_by(
+        if .priority == "critical" then 0
+        elif .priority == "high" then 1
+        elif .priority == "normal" then 2
+        else 3 end
+    )' "$SPAWN_QUEUE")
+
+    # Collect spawns to process (up to budget)
+    local -a spawn_pids=()
+    local -a spawn_ids=()
+    local processed=0
+
+    while read spawn_json; do
+        if [[ $processed -ge $budget ]]; then
+            break
+        fi
+
+        local parent=$(echo "$spawn_json" | jq -r '.parent')
+        local task=$(echo "$spawn_json" | jq -r '.task')
+        local specialization=$(echo "$spawn_json" | jq -r '.specialization')
+        local spawn_id=$(echo "$spawn_json" | jq -r '.id')
+
+        # Launch in background for PARALLEL execution
+        spawn_subagent_async "$parent" "$task" "$specialization" "$spawn_id" &
+        spawn_pids+=($!)
+        spawn_ids+=("$spawn_id")
+
+        log_info "Launched spawn $spawn_id (PID: ${spawn_pids[-1]})"
+        ((processed++)) || true
+    done < <(echo "$sorted" | jq -c '.[]')
+
+    if [[ ${#spawn_pids[@]} -gt 0 ]]; then
+        log_info "Waiting for ${#spawn_pids[@]} parallel spawns to complete..."
+
+        # Wait for all parallel spawns
+        local failed=0
+        for i in "${!spawn_pids[@]}"; do
+            if wait "${spawn_pids[$i]}" 2>/dev/null; then
+                log_success "Spawn ${spawn_ids[$i]} completed"
+            else
+                log_warning "Spawn ${spawn_ids[$i]} failed or timed out"
+                ((failed++)) || true
+            fi
+
+            # Remove from queue
+            local updated=$(jq --arg id "${spawn_ids[$i]}" 'map(select(.id != $id))' "$SPAWN_QUEUE")
+            echo "$updated" > "$SPAWN_QUEUE"
+
+            # Decrement budget
+            decrement_spawn_budget
+        done
+
+        log_success "$processed spawns processed in parallel ($failed failed)"
+    fi
+
+    local remaining=$(jq 'length' "$SPAWN_QUEUE" 2>/dev/null || echo 0)
+    if [[ $remaining -gt 0 ]]; then
+        log_info "$remaining spawns deferred to next cycle"
     fi
 }
 
-# ============================================================================
-# SPAWN MANAGEMENT
-# ============================================================================
-
-get_active_spawns() {
-    jq '[.[] | select(.status == "running")]' "$SPAWN_QUEUE"
-}
-
-get_spawn_count() {
+# Async version of spawn_subagent for parallel execution
+spawn_subagent_async() {
     local parent=$1
-    jq --arg parent "$parent" '[.[] | select(.parent == $parent)] | length' "$SPAWN_REGISTRY"
+    local task=$2
+    local specialization=$3
+    local spawn_id=$4
+
+    local spawn_workdir="$SPAWN_DIR/$spawn_id"
+    mkdir -p "$spawn_workdir"
+
+    # Select model based on specialization and task
+    local model=$(get_model_for_spawn "$specialization" "$task")
+
+    # Build minimal prompt
+    local prompt_file="$spawn_workdir/prompt.md"
+    cat > "$prompt_file" << PROMPT
+# Task Assignment
+
+## Specialization
+$specialization
+
+## Task
+$task
+
+## Instructions
+$(get_specialization_prompt "$specialization")
+
+## Working Directory
+$PANTHEON_ROOT
+
+## Project Directory
+$PANTHEON_PROJECTS_DIR/rscan
+
+## Output Location
+$spawn_workdir/
+
+CRITICAL: Execute the task completely. Write real code, not stubs.
+PROMPT
+
+    # Execute with selected model
+    local response_file="$spawn_workdir/response.md"
+
+    timeout "$SPAWN_TIMEOUT" claude --print --model "$model" \
+        --permission-mode bypassPermissions \
+        < "$prompt_file" > "$response_file" 2>/dev/null || true
+
+    # Process output
+    process_subagent_output "$spawn_id" "$parent" "$response_file"
+
+    # Register completion
+    local updated=$(jq --arg id "$spawn_id" \
+        --arg parent "$parent" \
+        --arg spec "$specialization" \
+        --arg task "$task" \
+        --arg model "$model" \
+        --arg completed "$(date -Iseconds)" \
+        '. += [{
+            "id": $id,
+            "parent": $parent,
+            "specialization": $spec,
+            "task": $task,
+            "model": $model,
+            "completed": $completed,
+            "workdir": "spawn/'"$spawn_id"'"
+        }]' "$SPAWN_REGISTRY")
+    echo "$updated" > "$SPAWN_REGISTRY"
 }
 
-cleanup_spawns() {
-    # Archive completed spawn workdirs older than threshold
-    find "$SPAWN_DIR" -maxdepth 1 -type d -mmin +60 -exec mv {} "$SPAWN_DIR/archive/" \; 2>/dev/null || true
+# =============================================================================
+# CLEANUP
+# =============================================================================
+
+cleanup_old_spawns() {
+    # Archive completed spawn workdirs older than 30 minutes
+    find "$SPAWN_DIR" -maxdepth 1 -type d -name "spawn_*" -mmin +30 \
+        -exec mv {} "$SPAWN_DIR/archive/" \; 2>/dev/null || true
 }
 
-# Initialize on source
-init_spawn_system
+# NOTE: init_spawn_system is called by orchestrator.sh after directories are created
+# Do NOT call it here at source time

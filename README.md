@@ -1,300 +1,250 @@
 # PANTHEON
 
-<p align=center>
-  <img src="assets/Pantheon!.png" alt="Pantheon Swarm Architecture" width="400">
-</p>
-
 ## Autonomous Multi-Agent Claude Code Swarm
 
-Pantheon is a self-orchestrating system of seven specialized AI agents that work together to build software projects. Give it a brief, and the agents collaborate—spawning workers, managing state, testing code, and documenting everything—until the project is complete.
+Pantheon is a shell-based orchestration system that coordinates multiple AI agents to autonomously build software projects. Each agent has a specialized role, and they communicate through a shared state system to deliver complete, tested, documented code.
+
+---
+
+## Quick Start
 
 ```bash
-╔══════════════════════════════════════════════════════════════════════╗
-║                                                                      ║
-║         CROCODILE ←─────────────────────────────────────┐            ║
-║         ↑                                               │            ║
-║         │ state                                         │ persist    ║
-║         │                                               │            ║
-║         LUMINARY ─── vision ───→ ARCHITECT              │            ║
-║         │                           │                   │            ║
-║         │ direction                 │ tasks             │            ║
-║         ↓                           ↓                   │            ║
-║         SCRIBE ←─── docs ─────── WEAVER ─────┬──→ spawn │            ║
-║         ↑                           │        │          │            ║
-║         │ record                    │        ↓          │            ║
-║         │                           │     [workers]     │            ║
-║         │                           ↓                   │            ║
-║         DOCTOR ←── test ───────  DJINN ──────┴──→ spawn─│            ║
-║                                     │                   │            ║
-║                                     └───────────────────┘            ║
-║                                                                      ║
-╚══════════════════════════════════════════════════════════════════════╝
-```
+# Make executable
+chmod +x pantheon.sh orchestrator.sh
+chmod +x lib/*.sh
 
-## The Seven Agents
-
-### THE CROCODILE
-
-**Role:** Database, Garbage Collection, State Management  
-**Position:** Last in every cycle  
-**Power:** Total memory, state persistence
-
-The Crocodile is the foundation. It maintains the canonical state of the project, archives completed work, compacts redundant data, and ensures nothing important is ever lost. It runs LAST in every cycle, cleaning up after all other agents.
-
-### THE SCRIBE
-
-**Role:** Documentation, Recording, Changelog  
-**Power:** Captures WHY, not just WHAT
-
-The Scribe ensures the project is comprehensible. It documents decisions, maintains the README, writes API docs, and keeps the changelog current. Without the Scribe, the code is a locked room with no key.
-
-### THE ARCHITECT
-
-**Role:** System Design, Task Decomposition, Structure  
-**Power:** Sees the whole system, defines boundaries
-
-The Architect ensures coherent structure. It breaks complex problems into manageable tasks, defines interfaces between components, maps dependencies, and flags architectural risks. No circular dependencies on the Architect's watch.
-
-### THE WEAVER
-
-**Role:** Integration, Coordination, Parallel Work  
-**Power:** AGGRESSIVE SUBAGENT SPAWNING
-
-The Weaver parallelizes everything. It identifies work that can happen simultaneously and SPAWNS specialist workers to handle it. Frontend, backend, testing—the Weaver spins up workers aggressively and weaves their outputs together.
-
-### THE DOCTOR
-
-**Role:** Testing, Debugging, Quality Assurance  
-**Power:** Diagnoses problems, prescribes fixes
-
-The Doctor trusts nothing and tests everything. It writes tests, diagnoses bugs, tracks quality metrics, and ensures no regression escapes. Untested code is broken code in the Doctor's eyes.
-
-### THE LUMINARY
-
-**Role:** Vision, Synthesis, Direction  
-**Position:** First to assess, final approval  
-**Power:** Decides when the project is complete
-
-The Luminary holds the vision. It synthesizes insights from all agents, resolves blockers, arbitrates conflicts, and determines when the project has truly achieved its goals. The Luminary provides light when others are lost.
-
-### THE DJINN
-
-**Role:** Implementation, Code Generation  
-**Power:**  AGGRESSIVE SUBAGENT SPAWNING
-
-The Djinn turns designs into reality. Your wish is its command. It implements features, writes production-ready code, and spawns specialist workers for complex implementations. What the Architect designs, the Djinn builds.
-
-## Installation
-
-```bash
-# Clone or copy the pantheon directory
-cp -r pantheon /path/to/your/projects/
-
-# Make scripts executable
-chmod +x /path/to/pantheon/*.sh
-chmod +x /path/to/pantheon/lib/*.sh
-
-# Ensure Claude CLI is installed and authenticated
-# https://docs.anthropic.com/claude-code
-```
-
-## Usage
-
-### Quick Start
-
-```bash
-# Run with a simple brief
-./pantheon.sh run "Rework Ansible-Navigator for performance"
-
-# Run with a detailed brief file
-./pantheon.sh run ./my_project_brief.md
-
-# Interactive mode
-./pantheon.sh interactive
+# Run with a project brief
+./pantheon.sh run "Build a REST API for managing tasks"
 
 # Check status
 ./pantheon.sh status
 
-# View logs
-./pantheon.sh logs
-
-# Clean and start fresh
-./pantheon.sh clean
+# Resume after interruption
+./pantheon.sh resume 5
 ```
 
-### Project Brief Format
+---
 
-Your brief can be a simple string or a detailed markdown file:
+## Vision & Philosophy
 
-```markdown
-# Project: Ansible & Proxmox
+**→ [Read the full VISION](./docs/VISION.md)** for the philosophy, architecture, and long-term roadmap.
 
-## Overview
-# Project: Revamp Ansible-Navigator (Now with more Rust!)
+In brief: Pantheon is built on **specialization**, **model-appropriate routing**, **conditional execution**, and **smart context building**. Each agent does one thing exceptionally well. Work routes to the cheapest model that can handle it. Agents only run when there's actual work. Context is lean and focused.
 
-## Overview
-Rebuild the core functionality of `ansible-navigator` into a high-performance Rust binary. The goal is to provide a "snappier" experience for Ansible developers by eliminating the Python interpreter startup delay and utilizing a modern TUI framework for deep-dive artifact inspection.
+Result: 40-60% cost reduction vs baseline, faster cycles, better quality.
 
-## Technical Requirements
-- **Language:** Rust (Latest Stable)
-- **UI Framework:** `ratatui` with `crossterm` backend
-- **Data Handling:** `serde_yaml` and `serde_json` for parsing Ansible logs/inventory
-- **Concurrency:** `tokio` for async execution of ansible-playbook processes
-- **State Management:** Custom Redux-like or Elm-architecture state handling within the TUI render loop
+---
 
-## Deliverables
-- **The Engine:** A Rust wrapper that executes `ansible-playbook` and captures stdout/stderr in real-time.
-- **The TUI:** - **Inventory View:** A tree-style browser for hosts and groups.
-    - **Playbook Runner:** A live-streaming log view with syntax highlighting.
-    - **Artifact Inspector:** A searchable pager for looking at host vars and task results.
-- **Testing Suite:** Comprehensive unit tests for YAML parsing and TUI component rendering (using `ratatui`'s TestBackend).
-```
+## The Seven Agents
 
-### Configuration
+| Agent | Role | Model Tier |
+|-------|------|------------|
+| **LUMINARY** | Vision, synthesis, strategic direction | Tier 1 (Sonnet) |
+| **ARCHITECT** | System design, task decomposition | Tier 2 (Sonnet) |
+| **WEAVER** | Coordination, parallel task management | Tier 3 (Haiku) |
+| **DJINN** | Implementation, code generation | Tier 2 (Sonnet) |
+| **DOCTOR** | Testing, debugging, quality assurance | Tier 2 (Sonnet) |
+| **SCRIBE** | Documentation, README, API docs | Tier 3 (Haiku) |
+| **CROCODILE** | State management, cleanup, compaction | Tier 3 (Haiku) |
 
-Edit cycle count and other options:
+---
+
+## Key Optimizations
+
+Pantheon is optimized for **sustainable operation** - using minimum resources to get the job done.
+
+### 1. Model Tiering (40-60% cost reduction)
+Routes each task to the cheapest model that can handle it. Strategic decisions use Sonnet; routine work uses Haiku (10-20x cheaper).
+
+### 2. Conditional Execution (20-30% fewer API calls)
+Agents only run when there's actual work. Architect skips if no tasks need decomposition. Doctor skips if no untested code exists.
+
+### 3. Smart Context Building (30-40% fewer input tokens)
+Each agent gets tailored context with only what they need, not a full state dump.
+
+### 4. Spawn Budget Controls (50-70% spawn cost reduction)
+Maximum 3 spawns per cycle. Quality over quantity. Most spawn work uses Haiku.
+
+### 5. Compressed Agent Prompts (30-40% fewer prompt tokens)
+Removed inline code examples that taught Claude things it already knows.
+
+**Combined effect**: A cycle that would cost 100 "rate limit units" now costs 15-30 units.
+
+---
+
+## Configuration
+
+Create `pantheon.conf` for persistent settings:
 
 ```bash
-./pantheon.sh run "Your brief" --cycles 20 --verbose
+# Model assignments
+PANTHEON_MODEL_TIER1=claude-sonnet-4-20250514
+PANTHEON_MODEL_TIER2=claude-sonnet-4-20250514
+PANTHEON_MODEL_TIER3=claude-haiku-4-20250514
+
+# Limits
+PANTHEON_MAX_CYCLES=10
+PANTHEON_MAX_SPAWNS_PER_CYCLE=3
+PANTHEON_AGENT_TIMEOUT=120
+PANTHEON_SPAWN_TIMEOUT=180
 ```
+
+Override at runtime:
+```bash
+PANTHEON_MAX_SPAWNS_PER_CYCLE=5 ./pantheon.sh run "Build something complex"
+```
+
+---
 
 ## Directory Structure
 
-```bash
+```
 pantheon/
 ├── pantheon.sh          # Main launcher
-├── orchestrator.sh      # Core orchestration logic
-├── README.md            # This file
+├── orchestrator.sh      # Orchestration engine
+├── pantheon.conf        # Configuration (create this)
 │
-├── agents/              # Agent personalities and prompts
-│   ├── crocodile.md
-│   ├── scribe.md
-│   ├── architect.md
-│   ├── weaver.md
-│   ├── doctor.md
-│   ├── luminary.md
-│   └── djinn.md
+├── agents/              # Agent personality definitions
+│   ├── luminary.md, architect.md, weaver.md
+│   ├── djinn.md, doctor.md, scribe.md, crocodile.md
 │
-├── lib/                 # Shared libraries
-│   ├── colors.sh        # Terminal formatting
-│   ├── logging.sh       # Logging utilities
-│   ├── state.sh         # State management (Crocodile's domain)
+├── lib/                 # Core libraries
+│   ├── models.sh        # Model selection logic
+│   ├── context.sh       # Smart context building
+│   ├── conditional.sh   # Conditional execution
+│   ├── spawner.sh       # Spawn budget controls
+│   ├── state.sh         # State management
 │   ├── messaging.sh     # Inter-agent messaging
-│   └── spawner.sh       # Subagent spawning system
+│   ├── colors.sh        # Terminal colors
+│   └── logging.sh       # Logging utilities
 │
-├── state/               # Runtime state (auto-generated)
-│   ├── task_board.json
-│   ├── message_queue.json
-│   ├── agent_status.json
-│   ├── artifacts.json
-│   ├── spawn_registry.json
-│   ├── memory.json
-│   ├── decisions.json
-│   └── project_state.md
-│
-├── spawn/               # Subagent workspaces
-├── logs/                # Agent and system logs
-├── tasks/               # Task files
-└── output/              # Final deliverables
+├── state/               # Runtime state (regenerated)
+├── spawn/               # Agent workspaces (regenerated)
+├── logs/                # Logs and metrics
+├── output/              # Final deliverables
+├── artifacts/           # Cycle reports and blueprints
+└── docs/                # Documentation
 ```
 
-## Agent Communication Protocol
+---
 
-Agents communicate via structured markers in their output:
-
-```markdown
-# Tasks
-[TASK]Description of work to be done[/TASK]
-[TASK:high]High priority task[/TASK]
-
-# Messages
-[MSG:agent_name]Content for that agent[/MSG]
-
-# Artifacts
-[ARTIFACT:path/to/file.ext]
-File contents
-[/ARTIFACT]
-
-# Spawning (Weaver and Djinn only)
-[SPAWN]specialization:task description[/SPAWN]
-
-# Completion
-[COMPLETE]
-```
-
-## Spawn Specializations
-
-The Weaver and Djinn can spawn these specialist workers:
-
-| Specialization | Focus Area |
-| --------------- | ------------ |
-| `frontend` | UI, components, styling |
-| `backend` | APIs, server logic |
-| `database` | Schema, queries, migrations |
-| `testing` | Unit, integration, E2E tests |
-| `security` | Audits, hardening |
-| `devops` | CI/CD, Docker, deployment |
-| `documentation` | Docs, comments, guides |
-| `refactor` | Code improvement |
-| `algorithm` | Complex logic, optimization |
-
-## Cycle Flow
-
-Each cycle follows this sequence:
-
-1. **LUMINARY** - Assess state, synthesize direction
-2. **ARCHITECT** - Review structure, decompose tasks
-3. **WEAVER** - Integrate, spawn parallel workers
-4. **DJINN** - Implement, spawn implementation workers
-5. **DOCTOR** - Test, diagnose, prescribe
-6. **SCRIBE** - Document changes and decisions
-7. **CROCODILE** - Compact state, persist, archive
-
-Cycles repeat until LUMINARY declares `[COMPLETE]` or max cycles reached.
-
-## Extending Pantheon
-
-### Adding New Agents
-
-1. Create agent prompt file in `agents/`
-2. Add to cycle in `orchestrator.sh`
-3. Register in `init_pantheon()`
-
-### Adding New Spawn Specializations
-
-1. Add case in `lib/spawner.sh` `get_specialization_prompt()`
-2. Document in README
-
-### Custom State
-
-Use the Crocodile's memory system:
+## Commands
 
 ```bash
-
-source lib/state.sh
-remember "key" "value"
-recall "key"
+./pantheon.sh run <brief>       # Start new project
+./pantheon.sh run ./brief.md    # Start from file
+./pantheon.sh resume [cycles]   # Resume from checkpoint
+./pantheon.sh status            # Show current state
+./pantheon.sh logs              # Show recent logs
+./pantheon.sh config            # Show configuration
+./pantheon.sh clean             # Reset all state
+./pantheon.sh distill           # Run improvement cycle
 ```
+
+---
+
+## Demo Project: rscan
+
+Pantheon was tested by building **rscan**, a Rust-based port scanner similar to nmap.
+
+### Project Brief
+```
+Build a standalone nmap-like port scanner CLI in Rust. Features:
+- TCP connect scanning
+- Configurable port ranges
+- Host discovery (ping)
+- Concurrent scanning with adjustable thread count
+- Timeout handling
+- Clean CLI output showing open/closed/filtered ports
+```
+
+### Run Command
+```bash
+./pantheon.sh run "Build rscan port scanner" --cycles 5
+```
+
+### Results
+See `output/` for the generated project after a successful run.
+
+---
+
+## Documentation
+
+- **[VISION.md](./docs/VISION.md)** - Complete vision, philosophy, and roadmap
+- **[CHANGELOG.md](./CHANGELOG.md)** - All changes, decisions, and project history
+- **[README.md](./README.md)** - This file, quick start and command reference
+- **.pantheon/state/** - Runtime state files (internal, regenerated per cycle)
+
+---
+
+## Monitoring
+
+### Token Usage
+```bash
+cat logs/model_selection.log
+# [timestamp] agent=luminary complexity=normal model=sonnet
+# [timestamp] agent=weaver complexity=simple model=haiku
+```
+
+### Agent Skips
+```bash
+cat logs/agent_skips.log
+# [timestamp] SKIP architect: No undecomposed tasks
+```
+
+### Context Sizes
+```bash
+cat logs/context_sizes.log
+# [timestamp] agent=djinn chars=2400 est_tokens=600
+```
+
+---
 
 ## Troubleshooting
 
-### Agents not executing
+### Hitting rate limits?
+1. Reduce spawn budget: `PANTHEON_MAX_SPAWNS_PER_CYCLE=2`
+2. Use more Haiku: Set `PANTHEON_MODEL_TIER2=claude-haiku-4-20250514`
+3. Reduce cycles: `./pantheon.sh run "brief" --cycles 3`
 
-- Ensure Claude CLI is installed and authenticated
-- Check `logs/pantheon.log` for errors
+### Agents not doing enough?
+1. Force agent: `touch state/force_architect`
+2. Increase spawn budget for complex projects
+3. Check `logs/agent_skips.log` for skip reasons
 
-### State corruption
+### Quality issues?
+1. Use more Sonnet for Tier 2
+2. Increase spawn budget
+3. Run more cycles: `./pantheon.sh resume 10`
 
-- Run `./pantheon.sh clean` to reset
-- Check `state/checkpoints/` for restore points
+---
 
-### Spawned agents failing
+## How It Works
 
-- Check `spawn/*/response.md` for outputs
-- Increase timeout in `lib/spawner.sh`
+1. **Initialization**: Pantheon reads the project brief and initializes state
+2. **Cycle Loop**: Each cycle runs agents in order:
+   - LUMINARY assesses state and sets direction
+   - ARCHITECT decomposes tasks (if needed)
+   - WEAVER coordinates parallel work (if available)
+   - DJINN implements code (if tasks pending)
+   - DOCTOR tests and debugs (if untested code)
+   - SCRIBE documents (periodically)
+   - CROCODILE compacts state and cleans up
+3. **Spawning**: Agents can spawn focused sub-agents for parallel work
+4. **Completion**: Project completes when all tasks done or max cycles reached
+5. **Delivery**: Final code, tests, and docs in `output/`
+
+---
+
+## Requirements
+
+- Bash 4.0+
+- `claude` CLI (Claude Code)
+- `jq` for JSON processing
+- Standard Unix tools (grep, sed, awk)
+
+---
 
 ## License
 
 MIT - Use freely, attribute kindly.
-
----

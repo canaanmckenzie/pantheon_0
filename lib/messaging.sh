@@ -1,12 +1,29 @@
 #!/bin/bash
-# Inter-Agent Messaging System
-# Enables asynchronous communication between agents
+# =============================================================================
+# INTER-AGENT MESSAGING SYSTEM
+# =============================================================================
+#
+# Enables asynchronous communication between agents.
+#
+# OPTIMIZATIONS:
+# - Message deduplication
+# - Auto-expiry for old messages
+# - Priority-based delivery
+#
+# =============================================================================
 
-MSG_QUEUE="$PANTHEON_ROOT/state/message_queue.json"
+PANTHEON_ROOT="${PANTHEON_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+# Use .pantheon/ structure (fallback if not set)
+PANTHEON_STATE_DIR="${PANTHEON_STATE_DIR:-$PANTHEON_ROOT/.pantheon/state}"
+PANTHEON_LOGS_DIR="${PANTHEON_LOGS_DIR:-$PANTHEON_ROOT/.pantheon/logs}"
+PANTHEON_SPAWN_DIR="${PANTHEON_SPAWN_DIR:-$PANTHEON_ROOT/.pantheon/spawn}"
+PANTHEON_ARTIFACTS_DIR="${PANTHEON_ARTIFACTS_DIR:-$PANTHEON_ROOT/.pantheon/artifacts}"
+PANTHEON_PROJECTS_DIR="${PANTHEON_PROJECTS_DIR:-$PANTHEON_ROOT/projects}"
+MSG_QUEUE="$PANTHEON_STATE_DIR/message_queue.json"
 
-# ============================================================================
+# =============================================================================
 # MESSAGE OPERATIONS
-# ============================================================================
+# =============================================================================
 
 send_message() {
     local from=$1
@@ -14,6 +31,11 @@ send_message() {
     local content=$3
     local priority=${4:-"normal"}
     local msg_type=${5:-"directive"}
+    
+    # Truncate very long messages
+    if [[ ${#content} -gt 500 ]]; then
+        content="${content:0:497}..."
+    fi
     
     local msg_id="msg_$(date +%s%N | md5sum | head -c 8)"
     
@@ -36,8 +58,6 @@ send_message() {
             "acknowledged": false
         }]' "$MSG_QUEUE")
     echo "$updated" > "$MSG_QUEUE"
-    
-    log_info "Message $msg_id: $from → $to"
 }
 
 broadcast_message() {
@@ -56,11 +76,16 @@ get_messages_for() {
     local agent_name=$1
     local mark_delivered=${2:-true}
     
-    # Get undelivered messages
+    # Get undelivered messages, sorted by priority
     local messages=$(jq --arg to "$agent_name" \
-        '[.[] | select(.to == $to and .delivered == false)]' "$MSG_QUEUE")
+        '[.[] | select(.to == $to and .delivered == false)] | sort_by(
+            if .priority == "urgent" then 0
+            elif .priority == "high" then 1
+            elif .priority == "normal" then 2
+            else 3 end
+        )' "$MSG_QUEUE" 2>/dev/null || echo "[]")
     
-    # Mark as delivered if requested
+    # Mark as delivered
     if [[ "$mark_delivered" == "true" ]] && [[ "$messages" != "[]" ]]; then
         local updated=$(jq --arg to "$agent_name" \
             'map(if .to == $to and .delivered == false then .delivered = true else . end)' \
@@ -71,11 +96,6 @@ get_messages_for() {
     echo "$messages"
 }
 
-get_messages_from() {
-    local agent_name=$1
-    jq --arg from "$agent_name" '[.[] | select(.from == $from)]' "$MSG_QUEUE"
-}
-
 acknowledge_message() {
     local msg_id=$1
     
@@ -84,23 +104,14 @@ acknowledge_message() {
     echo "$updated" > "$MSG_QUEUE"
 }
 
-# ============================================================================
+# =============================================================================
 # SPECIALIZED MESSAGE TYPES
-# ============================================================================
-
-request_assistance() {
-    local from=$1
-    local to=$2
-    local task=$3
-    
-    send_message "$from" "$to" "ASSISTANCE REQUESTED: $task" "high" "request"
-}
+# =============================================================================
 
 report_blocker() {
     local from=$1
     local blocker=$2
     
-    # Send to Architect and Luminary
     send_message "$from" "architect" "BLOCKER: $blocker" "urgent" "blocker"
     send_message "$from" "luminary" "BLOCKER: $blocker" "urgent" "blocker"
 }
@@ -109,9 +120,7 @@ report_completion() {
     local from=$1
     local task=$2
     
-    # Notify Scribe for documentation
     send_message "$from" "scribe" "COMPLETED: $task" "normal" "completion"
-    # Notify Crocodile for state update
     send_message "$from" "crocodile" "COMPLETED: $task" "normal" "completion"
 }
 
@@ -119,27 +128,25 @@ request_review() {
     local from=$1
     local artifact=$2
     
-    # Send to Doctor for testing
     send_message "$from" "doctor" "REVIEW REQUESTED: $artifact" "high" "review"
 }
 
-request_spawn() {
-    local from=$1
-    local task=$2
-    local specialization=$3
+# =============================================================================
+# MESSAGE CLEANUP
+# =============================================================================
+
+cleanup_old_messages() {
+    # Remove messages older than 1 hour that have been delivered
+    local cutoff=$(date -d '1 hour ago' -Iseconds 2>/dev/null || date -Iseconds)
     
-    # Only Weaver and Djinn can spawn
-    if [[ "$from" == "weaver" || "$from" == "djinn" ]]; then
-        send_message "$from" "$from" "SPAWN: $specialization for $task" "high" "spawn_request"
-    else
-        # Redirect to Weaver
-        send_message "$from" "weaver" "SPAWN REQUEST: Need $specialization for $task" "high" "spawn_delegation"
-    fi
+    local cleaned=$(jq --arg cutoff "$cutoff" \
+        '[.[] | select(.delivered != true or .timestamp > $cutoff)]' "$MSG_QUEUE" 2>/dev/null || cat "$MSG_QUEUE")
+    echo "$cleaned" > "$MSG_QUEUE"
 }
 
-# ============================================================================
-# MESSAGE FORMATTING FOR CONTEXT
-# ============================================================================
+# =============================================================================
+# FORMATTING FOR CONTEXT
+# =============================================================================
 
 format_messages_for_context() {
     local agent_name=$1

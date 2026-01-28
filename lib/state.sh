@@ -1,37 +1,60 @@
 #!/bin/bash
-# State Management Library - The Crocodile's Domain
-# Handles all persistent state, garbage collection, and compaction
+# =============================================================================
+# STATE MANAGEMENT LIBRARY
+# =============================================================================
+#
+# Core state management for Pantheon. Handles task board, artifacts,
+# memory, and checkpointing.
+#
+# OPTIMIZATIONS FROM ORIGINAL:
+# - Added summarization functions for context building
+# - Improved checkpoint compression
+# - Better garbage collection
+#
+# =============================================================================
 
-STATE_DIR="$PANTHEON_ROOT/state"
-STATE_DB="$STATE_DIR/pantheon.db"
+PANTHEON_ROOT="${PANTHEON_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+# Use .pantheon/ structure (fallback if not set)
+PANTHEON_STATE_DIR="${PANTHEON_STATE_DIR:-$PANTHEON_ROOT/.pantheon/state}"
+PANTHEON_LOGS_DIR="${PANTHEON_LOGS_DIR:-$PANTHEON_ROOT/.pantheon/logs}"
+PANTHEON_SPAWN_DIR="${PANTHEON_SPAWN_DIR:-$PANTHEON_ROOT/.pantheon/spawn}"
+PANTHEON_ARTIFACTS_DIR="${PANTHEON_ARTIFACTS_DIR:-$PANTHEON_ROOT/.pantheon/artifacts}"
+PANTHEON_PROJECTS_DIR="${PANTHEON_PROJECTS_DIR:-$PANTHEON_ROOT/projects}"
 
-# ============================================================================
+# Use the .pantheon/ state directory
+STATE_DIR="$PANTHEON_STATE_DIR"
+
+# =============================================================================
 # INITIALIZATION
-# ============================================================================
+# =============================================================================
 
 init_state_db() {
     mkdir -p "$STATE_DIR"
+    mkdir -p "$STATE_DIR/checkpoints"
+    mkdir -p "$STATE_DIR/archive"
     
-    # Initialize JSON state files
+    # Initialize JSON state files (only if they don't exist)
     [[ -f "$STATE_DIR/task_board.json" ]] || echo "[]" > "$STATE_DIR/task_board.json"
     [[ -f "$STATE_DIR/message_queue.json" ]] || echo "[]" > "$STATE_DIR/message_queue.json"
     [[ -f "$STATE_DIR/agent_status.json" ]] || echo "{}" > "$STATE_DIR/agent_status.json"
     [[ -f "$STATE_DIR/artifacts.json" ]] || echo "[]" > "$STATE_DIR/artifacts.json"
     [[ -f "$STATE_DIR/spawn_queue.json" ]] || echo "[]" > "$STATE_DIR/spawn_queue.json"
+    [[ -f "$STATE_DIR/spawn_registry.json" ]] || echo "[]" > "$STATE_DIR/spawn_registry.json"
     [[ -f "$STATE_DIR/memory.json" ]] || echo "{}" > "$STATE_DIR/memory.json"
     [[ -f "$STATE_DIR/decisions.json" ]] || echo "[]" > "$STATE_DIR/decisions.json"
+    [[ -f "$STATE_DIR/cycle_count" ]] || echo "0" > "$STATE_DIR/cycle_count"
 }
 
-# ============================================================================
+# =============================================================================
 # AGENT REGISTRATION
-# ============================================================================
+# =============================================================================
 
 register_agent() {
     local agent_name=$1
     local status_file="$STATE_DIR/agent_status.json"
     
     local updated=$(jq --arg name "$agent_name" \
-        '.[$name] = {"registered": true, "complete": false, "cycles": 0, "last_active": null}' \
+        '.[$name] = {"registered": true, "complete": false, "cycles_run": 0, "last_active": null, "skipped": 0}' \
         "$status_file")
     echo "$updated" > "$status_file"
 }
@@ -52,19 +75,39 @@ mark_agent_complete() {
     update_agent_status "$agent_name" "complete" "true"
 }
 
+mark_agent_skipped() {
+    local agent_name=$1
+    local status_file="$STATE_DIR/agent_status.json"
+    
+    local updated=$(jq --arg name "$agent_name" \
+        '.[$name].skipped = ((.[$name].skipped // 0) + 1)' "$status_file")
+    echo "$updated" > "$status_file"
+}
+
+increment_agent_cycles() {
+    local agent_name=$1
+    local status_file="$STATE_DIR/agent_status.json"
+    
+    local updated=$(jq --arg name "$agent_name" --arg time "$(date -Iseconds)" \
+        '.[$name].cycles_run = ((.[$name].cycles_run // 0) + 1) | .[$name].last_active = $time' \
+        "$status_file")
+    echo "$updated" > "$status_file"
+}
+
 get_agent_status() {
     local agent_name=$1
     jq -r --arg name "$agent_name" '.[$name] // {}' "$STATE_DIR/agent_status.json"
 }
 
-# ============================================================================
+# =============================================================================
 # TASK MANAGEMENT
-# ============================================================================
+# =============================================================================
 
 add_task() {
     local task_description=$1
     local creator=$2
     local priority=${3:-"normal"}
+    local task_type=${4:-"general"}
     local task_file="$STATE_DIR/task_board.json"
     
     local task_id="task_$(date +%s%N | md5sum | head -c 8)"
@@ -73,12 +116,14 @@ add_task() {
         --arg desc "$task_description" \
         --arg creator "$creator" \
         --arg priority "$priority" \
+        --arg type "$task_type" \
         --arg created "$(date -Iseconds)" \
         '. += [{
             "id": $id,
             "description": $desc,
             "creator": $creator,
             "priority": $priority,
+            "type": $type,
             "status": "pending",
             "created": $created,
             "assigned_to": null,
@@ -94,8 +139,8 @@ claim_task() {
     local agent_name=$2
     local task_file="$STATE_DIR/task_board.json"
     
-    local updated=$(jq --arg id "$task_id" --arg agent "$agent_name" \
-        'map(if .id == $id then .status = "in_progress" | .assigned_to = $agent else . end)' \
+    local updated=$(jq --arg id "$task_id" --arg agent "$agent_name" --arg time "$(date -Iseconds)" \
+        'map(if .id == $id then .status = "in_progress" | .assigned_to = $agent | .started = $time else . end)' \
         "$task_file")
     echo "$updated" > "$task_file"
 }
@@ -119,15 +164,21 @@ get_tasks_for_agent() {
     jq --arg agent "$agent_name" '[.[] | select(.assigned_to == $agent)]' "$STATE_DIR/task_board.json"
 }
 
-# ============================================================================
+# =============================================================================
 # ARTIFACT MANAGEMENT
-# ============================================================================
+# =============================================================================
 
 register_artifact() {
     local artifact_path=$1
     local creator=$2
     local artifact_type=${3:-"file"}
     local artifact_file="$STATE_DIR/artifacts.json"
+    
+    # Check for duplicate
+    local exists=$(jq --arg path "$artifact_path" '[.[] | select(.path == $path)] | length' "$artifact_file" 2>/dev/null || echo 0)
+    if [[ $exists -gt 0 ]]; then
+        return 0  # Already registered
+    fi
     
     local updated=$(jq --arg path "$artifact_path" \
         --arg creator "$creator" \
@@ -137,8 +188,28 @@ register_artifact() {
             "path": $path,
             "creator": $creator,
             "type": $type,
-            "created": $created
+            "created": $created,
+            "tested": false,
+            "documented": false
         }]' "$artifact_file")
+    echo "$updated" > "$artifact_file"
+}
+
+mark_artifact_tested() {
+    local artifact_path=$1
+    local artifact_file="$STATE_DIR/artifacts.json"
+    
+    local updated=$(jq --arg path "$artifact_path" \
+        'map(if .path == $path then .tested = true else . end)' "$artifact_file")
+    echo "$updated" > "$artifact_file"
+}
+
+mark_artifact_documented() {
+    local artifact_path=$1
+    local artifact_file="$STATE_DIR/artifacts.json"
+    
+    local updated=$(jq --arg path "$artifact_path" \
+        'map(if .path == $path then .documented = true else . end)' "$artifact_file")
     echo "$updated" > "$artifact_file"
 }
 
@@ -146,28 +217,25 @@ get_artifacts() {
     cat "$STATE_DIR/artifacts.json"
 }
 
-get_artifacts_by_type() {
-    local artifact_type=$1
-    jq --arg type "$artifact_type" '[.[] | select(.type == $type)]' "$STATE_DIR/artifacts.json"
-}
-
-# ============================================================================
-# MEMORY (CROCODILE'S LONG-TERM STORAGE)
-# ============================================================================
+# =============================================================================
+# MEMORY (KEY-VALUE STORE)
+# =============================================================================
 
 remember() {
     local key=$1
     local value=$2
+    local important=${3:-false}
     local memory_file="$STATE_DIR/memory.json"
+    local cycle=$(cat "$STATE_DIR/cycle_count" 2>/dev/null || echo 0)
     
-    local updated=$(jq --arg key "$key" --arg val "$value" \
-        '.[$key] = $val' "$memory_file")
+    local updated=$(jq --arg key "$key" --arg val "$value" --argjson important "$important" --argjson cycle "$cycle" \
+        '.[$key] = {"value": $val, "important": $important, "cycle": $cycle}' "$memory_file")
     echo "$updated" > "$memory_file"
 }
 
 recall() {
     local key=$1
-    jq -r --arg key "$key" '.[$key] // ""' "$STATE_DIR/memory.json"
+    jq -r --arg key "$key" '.[$key].value // ""' "$STATE_DIR/memory.json"
 }
 
 remember_decision() {
@@ -184,67 +252,99 @@ remember_decision() {
             "decision": $decision,
             "rationale": $rationale,
             "agent": $agent,
-            "timestamp": $timestamp
+            "timestamp": $timestamp,
+            "adr_written": false
         }]' "$decisions_file")
     echo "$updated" > "$decisions_file"
 }
 
-# ============================================================================
-# GARBAGE COLLECTION & COMPACTION (CROCODILE'S PRIMARY DUTY)
-# ============================================================================
+# =============================================================================
+# GARBAGE COLLECTION & COMPACTION
+# =============================================================================
 
 compact_state() {
-    log_info "Crocodile: Beginning state compaction..."
-    
-    # Remove completed tasks older than threshold
     local task_file="$STATE_DIR/task_board.json"
-    local threshold=$(date -d '1 hour ago' -Iseconds 2>/dev/null || date -Iseconds)
+    local msg_file="$STATE_DIR/message_queue.json"
+    local decisions_file="$STATE_DIR/decisions.json"
+    local memory_file="$STATE_DIR/memory.json"
     
     # Archive completed tasks
-    local completed=$(jq '[.[] | select(.status == "complete")]' "$task_file")
-    if [[ "$completed" != "[]" ]]; then
-        echo "$completed" >> "$STATE_DIR/task_archive.json"
+    local completed=$(jq '[.[] | select(.status == "complete")]' "$task_file" 2>/dev/null || echo "[]")
+    if [[ "$completed" != "[]" ]] && [[ $(echo "$completed" | jq 'length') -gt 0 ]]; then
+        echo "$completed" >> "$STATE_DIR/archive/completed_tasks.json"
+        # Keep only non-complete tasks
+        local active=$(jq '[.[] | select(.status != "complete")]' "$task_file")
+        echo "$active" > "$task_file"
     fi
     
-    # Keep only pending and in-progress
-    local active=$(jq '[.[] | select(.status != "complete")]' "$task_file")
-    echo "$active" > "$task_file"
+    # Clear delivered messages
+    if [[ -f "$msg_file" ]]; then
+        local undelivered=$(jq '[.[] | select(.delivered != true)]' "$msg_file" 2>/dev/null || echo "[]")
+        echo "$undelivered" > "$msg_file"
+    fi
     
-    # Compact message queue - remove delivered messages
-    local msg_file="$STATE_DIR/message_queue.json"
-    local undelivered=$(jq '[.[] | select(.delivered != true)]' "$msg_file")
-    echo "$undelivered" > "$msg_file"
+    # Trim decision log to last 50
+    if [[ -f "$decisions_file" ]]; then
+        local trimmed=$(jq '.[-50:]' "$decisions_file" 2>/dev/null || echo "[]")
+        echo "$trimmed" > "$decisions_file"
+    fi
     
-    # Trim decision log to last 100
-    local decisions_file="$STATE_DIR/decisions.json"
-    local trimmed=$(jq '.[-100:]' "$decisions_file")
-    echo "$trimmed" > "$decisions_file"
-    
-    log_info "Crocodile: State compaction complete"
+    # Compact memory - keep important + recent
+    if [[ -f "$memory_file" ]]; then
+        local cycle=$(cat "$STATE_DIR/cycle_count" 2>/dev/null || echo 0)
+        local min_cycle=$((cycle - 5))
+        local compacted=$(jq --argjson min "$min_cycle" \
+            'to_entries | map(select(.value.important == true or (.value.cycle // 0) >= $min)) | from_entries' \
+            "$memory_file" 2>/dev/null || echo "{}")
+        echo "$compacted" > "$memory_file"
+    fi
 }
 
 checkpoint_state() {
-    local checkpoint_name=${1:-"checkpoint_$(date +%Y%m%d_%H%M%S)"}
-    local checkpoint_dir="$STATE_DIR/checkpoints/$checkpoint_name"
+    local checkpoint_name=${1:-"cycle_$(cat "$STATE_DIR/cycle_count" 2>/dev/null || echo 0)"}
+    local checkpoint_dir="$STATE_DIR/checkpoints"
     
     mkdir -p "$checkpoint_dir"
     
-    cp "$STATE_DIR"/*.json "$checkpoint_dir/" 2>/dev/null || true
-    cp "$STATE_DIR"/*.md "$checkpoint_dir/" 2>/dev/null || true
-    
-    log_info "Crocodile: Checkpoint saved: $checkpoint_name"
+    # Create compressed checkpoint
+    tar -czf "$checkpoint_dir/${checkpoint_name}.tar.gz" \
+        -C "$STATE_DIR" \
+        task_board.json \
+        project_state.md \
+        artifacts.json \
+        decisions.json \
+        memory.json \
+        agent_status.json \
+        2>/dev/null || true
 }
 
 restore_checkpoint() {
     local checkpoint_name=$1
-    local checkpoint_dir="$STATE_DIR/checkpoints/$checkpoint_name"
+    local checkpoint_file="$STATE_DIR/checkpoints/${checkpoint_name}.tar.gz"
     
-    if [[ -d "$checkpoint_dir" ]]; then
-        cp "$checkpoint_dir"/*.json "$STATE_DIR/" 2>/dev/null || true
-        cp "$checkpoint_dir"/*.md "$STATE_DIR/" 2>/dev/null || true
-        log_info "Crocodile: Restored checkpoint: $checkpoint_name"
-    else
-        log_error "Crocodile: Checkpoint not found: $checkpoint_name"
-        return 1
+    if [[ -f "$checkpoint_file" ]]; then
+        tar -xzf "$checkpoint_file" -C "$STATE_DIR"
+        return 0
     fi
+    return 1
+}
+
+# =============================================================================
+# STATE HEALTH CHECK
+# =============================================================================
+
+check_state_health() {
+    local errors=0
+
+    # Check JSON validity
+    for json_file in "$STATE_DIR"/*.json; do
+        if [[ -f "$json_file" ]]; then
+            if ! jq . "$json_file" >/dev/null 2>&1; then
+                echo "INVALID JSON: $json_file"
+                ((errors++)) || true
+            fi
+        fi
+    done
+
+    return $errors
 }
