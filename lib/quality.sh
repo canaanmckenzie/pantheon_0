@@ -342,7 +342,8 @@ validate_test_quality() {
                 echo "**FAILED**: Tests don't compile" | tee -a "$test_quality_log"
 
                 # Count compilation errors
-                local error_count=$(echo "$compile_output" | grep -c "^error\[E" || echo 0)
+                local error_count
+                error_count=$(echo "$compile_output" | grep -c "^error\[E") || error_count=0
                 echo "Compilation errors: $error_count" | tee -a "$test_quality_log"
                 ((failures++))
             else

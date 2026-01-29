@@ -48,6 +48,7 @@ source "$PANTHEON_ROOT/lib/context.sh"
 source "$PANTHEON_ROOT/lib/conditional.sh"
 source "$PANTHEON_ROOT/lib/verify.sh"
 source "$PANTHEON_ROOT/lib/quality.sh"
+source "$PANTHEON_ROOT/lib/self_heal.sh"
 
 # =============================================================================
 # CONFIGURATION
@@ -135,8 +136,8 @@ init_pantheon() {
         log_info "Project directory: $project_dir"
     fi
 
-    # Register agents
-    for agent in luminary architect weaver djinn doctor aletheia scribe crocodile; do
+    # Register agents (Aletheia excluded - she runs externally via ./pantheon.sh aletheia)
+    for agent in luminary architect weaver djinn doctor scribe crocodile; do
         register_agent "$agent"
     done
 
@@ -232,7 +233,7 @@ run_agent() {
     # Execute with timeout - matching pantheon_0 invocation style
     # Use --system-prompt for agent identity, pipe context as input
     timeout "$AGENT_TIMEOUT" claude --print --model "$model" \
-        --permission-mode bypassPermissions \
+        --dangerously-skip-permissions \
         --system-prompt "$(cat "$agent_prompt_file")" \
         < "$context_file" > "$response_file" 2>&1 || {
         local exit_code=$?
@@ -270,7 +271,9 @@ run_agent() {
     # -------------------------------------------------------------------------
     # STEP 7: Check for rate limiting
     # -------------------------------------------------------------------------
-    if grep -qi "rate.limit\|hit your limit\|resets at\|too many requests" "$response_file" 2>/dev/null; then
+    # NOTE: Be careful with pattern matching - don't false positive on code
+    # that discusses rate limiting as a feature. Look for API-specific phrases.
+    if grep -qi "you.ve hit your.*limit\|your.*limit.*resets\|too many requests.*try again\|rate limit exceeded\|API rate limit" "$response_file" 2>/dev/null; then
         log_rate_limit "$agent_name"
         touch "$PANTHEON_STATE_DIR/rate_limit.flag"
         return 1
@@ -280,10 +283,14 @@ run_agent() {
     # STEP 8: Process response and extract markers
     # -------------------------------------------------------------------------
     process_agent_response "$agent_name" "$response_file"
-    
+
     # Update agent status
     increment_agent_cycles "$agent_name"
-    
+
+    # Track agent health and token usage (self-healing metrics)
+    track_agent_health "$agent_name" "$duration" 2>/dev/null || true
+    log_token_usage "$agent_name" 2>/dev/null || true
+
     log_success "$agent_name complete (${duration}s)"
     return 0
 }
@@ -326,8 +333,10 @@ process_agent_response() {
         [[ -n "$target" && -n "$content" ]] && send_message "$agent_name" "$target" "$content"
     done < <(perl -0777 -ne 'while (/\[MSG:(\w+)\](.*?)\[\/MSG\]/gs) { print "$1\x00$2\x00"; }' "$response_file" 2>/dev/null)
 
-    # Extract spawn requests (only weaver and djinn)
+    # Extract spawn requests (only weaver and djinn have spawn privileges)
+    # NOTE: Aletheia removed from internal agents - she runs externally and doesn't spawn
     if [[ "$agent_name" == "weaver" || "$agent_name" == "djinn" ]]; then
+        # Standard spawn format: [SPAWN]task[/SPAWN]
         while IFS= read -r spawn; do
             local clean_spawn=$(echo "$spawn" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
             [[ -n "$clean_spawn" ]] && queue_spawn "$agent_name" "$clean_spawn"
@@ -397,6 +406,11 @@ process_agent_response() {
             log_warning "$agent_name attempted [COMPLETE] - only Luminary can declare completion"
         fi
     fi
+
+    # -------------------------------------------------------------------------
+    # NOTE: Aletheia special markers removed - she now runs EXTERNALLY
+    # via ./pantheon.sh aletheia and can restart with ./pantheon.sh resume
+    # -------------------------------------------------------------------------
 }
 
 # =============================================================================
@@ -409,10 +423,12 @@ process_agent_response() {
 # 3. WEAVER - Parallel coordination (conditional)
 # 4. DJINN - Implementation (conditional)
 # 5. DOCTOR - Testing (conditional)
-# 6. SCRIBE - Documentation (conditional)
-# 7. CROCODILE - State maintenance (always runs)
+# 6. ALETHEIA - Now runs EXTERNALLY via ./pantheon.sh aletheia (removed from internal loop)
+# 7. SCRIBE - Documentation (conditional)
+# 8. CROCODILE - State maintenance (always runs)
 #
 # After agents, process spawn queue (with budget).
+# Aletheia can force cycle continuation via [OVERRIDE] marker.
 #
 # =============================================================================
 
@@ -425,17 +441,27 @@ run_cycle() {
     
     # Reset spawn budget for this cycle
     reset_spawn_budget
-    
+
+    # -------------------------------------------------------------------------
+    # PRE-CYCLE HEALTH CHECK (Self-Healing)
+    # -------------------------------------------------------------------------
+    if ! pre_cycle_health_check; then
+        log_warning "Health check found issues - attempting auto-fixes"
+        # If compilation still fails after auto-fix, the priority directive is set
+        # and Djinn will see it in context
+    fi
+
     # Track metrics
     local agents_run=0
     local agents_skipped=0
-    
+
     # -------------------------------------------------------------------------
     # AGENT EXECUTION ORDER
     # -------------------------------------------------------------------------
     # Note: Order matters! Luminary sets direction, others follow.
     
-    local agents=(luminary architect weaver djinn doctor aletheia scribe crocodile)
+    # NOTE: Aletheia removed from internal loop - she runs EXTERNALLY via ./pantheon.sh aletheia
+    local agents=(luminary architect weaver djinn doctor scribe crocodile)
     
     for agent in "${agents[@]}"; do
         # Build appropriate directive based on cycle phase
@@ -456,9 +482,7 @@ run_cycle() {
             doctor)
                 directive="Test new artifacts. Diagnose any bugs. Write regression tests."
                 ;;
-            aletheia)
-                directive="Verify all gates. Check for stubs and incomplete features. Override false completions. Keep cycle running until perfect."
-                ;;
+            # NOTE: aletheia removed - runs externally via ./pantheon.sh aletheia
             scribe)
                 directive="Document completed work. Update README and changelog."
                 ;;
@@ -789,6 +813,11 @@ STATE
         run_cycle "$cycle" "$max_cycles" || cycle_result=$?
 
         log_info "Cycle $cycle returned: $cycle_result"
+
+        # =====================================================================
+        # NOTE: Aletheia force_continuation removed - she now runs EXTERNALLY
+        # via ./pantheon.sh aletheia and restarts with ./pantheon.sh resume
+        # =====================================================================
 
         if [[ $cycle_result -eq 0 ]]; then
             project_complete=true

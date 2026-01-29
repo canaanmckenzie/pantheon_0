@@ -265,12 +265,15 @@ should_run_scribe() {
 }
 
 # ---------------------------------------------------------------------------
-# ALETHEIA - Always runs (the Sentinel never sleeps)
+# ALETHEIA - Now runs EXTERNALLY via ./pantheon.sh aletheia
+# ---------------------------------------------------------------------------
+# NOTE: Aletheia removed from internal agent loop.
+# She runs as an external supervisor with full Claude Code access.
+# Start her with: ./pantheon.sh aletheia
 # ---------------------------------------------------------------------------
 should_run_aletheia() {
-    # Aletheia always runs - she is the guardian of truth
-    # Her job is to verify, override false completions, and keep the cycle going
-    return 0
+    # Always returns 1 (skip) since she's external now
+    return 1
 }
 
 # ---------------------------------------------------------------------------

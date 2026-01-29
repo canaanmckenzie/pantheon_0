@@ -120,8 +120,9 @@ get_model_for_agent() {
             ;;
 
         aletheia)
-            # Aletheia ALWAYS runs on Opus - she is the final arbiter of truth
-            # Full spawn privileges, no budget limits, maximum reasoning capability
+            # Aletheia runs EXTERNALLY via ./pantheon.sh aletheia on Opus
+            # She monitors the pantheon and can restart with ./pantheon.sh resume
+            # This case kept for reference but she's not in the internal agent loop
             echo "$MODEL_TIER0"
             ;;
 
@@ -298,10 +299,12 @@ select_model() {
 get_model_for_spawn() {
     local specialization=$1
     local task="$2"
-    
+
     # Check if task itself indicates complexity
     local complexity=$(detect_task_complexity "$task" "spawn")
-    
+
+    # NOTE: intervention specialization removed - Aletheia now runs externally
+
     # Specializations that always need Sonnet
     case "$specialization" in
         algorithm|security|refactor|debug)
@@ -309,7 +312,7 @@ get_model_for_spawn() {
             return
             ;;
     esac
-    
+
     # Otherwise, use complexity detection
     case "$complexity" in
         complex) echo "$MODEL_TIER2" ;;

@@ -344,14 +344,23 @@ build_context_for_djinn() {
 
     # Source directory library for dynamic paths
     source "$PANTHEON_ROOT/lib/directories.sh" 2>/dev/null || true
+    source "$PANTHEON_ROOT/lib/self_heal.sh" 2>/dev/null || true
     local project_name=$(detect_project_name)
     local project_dir=$(get_project_dir)
+
+    # Check for priority directives (compilation errors, etc.)
+    local priority_directive=$(get_priority_directive 2>/dev/null || echo "")
 
     cat << CONTEXT
 # DJINN CONTEXT - Cycle $(get_cycle_info)
 
 ## Your Directive
 $directive
+
+$(if [[ -n "$priority_directive" ]]; then
+    echo "$priority_directive"
+    echo ""
+fi)
 
 ## Active Tasks for Implementation
 $(jq -r '.[] | select(.status=="pending" or .status=="in_progress") | select(.type=="implementation" or .type=="feature" or .type==null) | "- \(.description)"' \
@@ -474,6 +483,8 @@ Report actual test output, not just claims of completion.
 CONTEXT
 }
 
+# NOTE: Aletheia now runs EXTERNALLY via ./pantheon.sh aletheia
+# This context builder is kept for reference but not used in the internal loop
 build_context_for_aletheia() {
     local directive="$1"
 
@@ -488,104 +499,148 @@ build_context_for_aletheia() {
     local luminary_complete=$(jq -r '.luminary.complete // "false"' \
         "$PANTHEON_STATE_DIR/agent_status.json" 2>/dev/null)
 
-    # Run stub detection
+    # =========================================================================
+    # TOKEN-EFFICIENT STUB DETECTION
+    # =========================================================================
+    # Use focused patterns, limit output to prevent token bloat
+    # Max 5 examples shown - enough to identify pattern without burning context
+    # =========================================================================
     local stub_count=0
-    local stub_results=""
+    local stub_summary=""
+    local stub_files=""
     if [[ -d "$project_dir/src" ]]; then
-        stub_results=$(grep -rn "unimplemented!()\|todo!()\|panic!.*not.*implement" "$project_dir/src" 2>/dev/null || true)
-        stub_count=$(echo "$stub_results" | grep -c . || echo 0)
+        # Count stubs efficiently
+        stub_count=$(grep -rln "unimplemented!()\|todo!()\|panic!.*not.*implement\|FIXME\|XXX" \
+            "$project_dir/src" 2>/dev/null | wc -l || echo 0)
+
+        if [[ $stub_count -gt 0 ]]; then
+            # Get just file:line for first 5 (token efficient)
+            stub_files=$(grep -rn "unimplemented!()\|todo!()\|panic!.*not.*implement" \
+                "$project_dir/src" 2>/dev/null | head -5 | cut -c1-100)
+            stub_summary="STUBS FOUND in $stub_count files. Examples: $stub_files"
+        fi
     fi
 
-    # Get gate results if they exist
-    local gate_results=""
-    if [[ -f "$PANTHEON_STATE_DIR/gate_results.json" ]]; then
-        gate_results=$(cat "$PANTHEON_STATE_DIR/gate_results.json")
+    # =========================================================================
+    # QUICK PRE-FLIGHT STATUS (avoids need to run commands)
+    # =========================================================================
+    local build_status="unknown"
+    local test_status="unknown"
+
+    # Check if recent build succeeded (look at cargo target)
+    if [[ -f "$project_dir/target/debug/${project_name}" ]] || \
+       [[ -f "$project_dir/target/release/${project_name}" ]]; then
+        build_status="binary_exists"
+    elif [[ -d "$project_dir/target" ]]; then
+        build_status="has_target_dir"
     fi
+
+    # Check for test results in logs
+    if [[ -f "$PANTHEON_LOGS_DIR/verification_output.log" ]]; then
+        if grep -q "test result: ok" "$PANTHEON_LOGS_DIR/verification_output.log" 2>/dev/null; then
+            test_status="passed"
+        elif grep -q "FAILED" "$PANTHEON_LOGS_DIR/verification_output.log" 2>/dev/null; then
+            test_status="failed"
+        fi
+    fi
+
+    # Get gate results summary (not full JSON)
+    local gate_summary="not_run"
+    if [[ -f "$PANTHEON_STATE_DIR/gate_results.json" ]]; then
+        local gate_passed=$(jq -r '.gate_passed // "unknown"' "$PANTHEON_STATE_DIR/gate_results.json" 2>/dev/null)
+        local gate_failures=$(jq -r '.failures // 0' "$PANTHEON_STATE_DIR/gate_results.json" 2>/dev/null)
+        gate_summary="passed=$gate_passed, failures=$gate_failures"
+    fi
+
+    # Count pending tasks efficiently
+    local pending_count=$(jq '[.[] | select(.status=="pending")] | length' \
+        "$PANTHEON_STATE_DIR/task_board.json" 2>/dev/null || echo 0)
+    local high_priority=$(jq '[.[] | select(.status=="pending") | select(.priority=="high" or .priority=="critical")] | length' \
+        "$PANTHEON_STATE_DIR/task_board.json" 2>/dev/null || echo 0)
 
     cat << CONTEXT
-# ALETHEIA CONTEXT - Cycle $(get_cycle_info)
+# ALETHEIA - Cycle $(get_cycle_info)
 
-## Your Directive
+## Directive
 $directive
 
-## THE SENTINEL'S DUTY
-You are the guardian of truth. Your job is to:
-1. Verify all completion claims
-2. Detect stubs and incomplete code
-3. Override false completions
-4. Keep the cycle running until the project is PERFECT
+## STATUS DASHBOARD
+| Check | Status |
+|-------|--------|
+| Luminary Complete | $luminary_complete |
+| Build | $build_status |
+| Tests | $test_status |
+| Gates | $gate_summary |
+| Stubs | $stub_count files |
+| Pending Tasks | $pending_count ($high_priority high/critical) |
 
-## Luminary Completion Status: $luminary_complete
+## PROJECT
+- Name: $project_name
+- Path: $project_dir
+- Build: $build_system
+
 $(if [[ "$luminary_complete" == "true" ]]; then
-    echo "**WARNING**: Luminary has declared [COMPLETE]. You must verify independently."
-    echo "Do NOT trust this claim. Run your own verification."
-else
-    echo "Luminary has not declared completion. Continue monitoring."
+    echo "## ACTION REQUIRED"
+    echo "Luminary declared [COMPLETE]. VERIFY INDEPENDENTLY before approving."
 fi)
 
-## Project Information
-**Project**: $project_name
-**Directory**: $project_dir
-**Build System**: $build_system
-
-## STUB DETECTION RESULTS
-**Stubs Found**: $stub_count
 $(if [[ $stub_count -gt 0 ]]; then
-    echo "**CRITICAL**: The following stubs MUST be implemented before completion:"
-    echo "\`\`\`"
-    echo "$stub_results" | head -20
-    echo "\`\`\`"
+    echo "## STUBS DETECTED (BLOCKING)"
+    echo "$stub_summary"
     echo ""
-    echo "[MSG:djinn]STUBS DETECTED - Implement these features: $stub_results[/MSG]"
-else
-    echo "No stubs detected. Good."
+    echo "Direct Djinn to implement: [MSG:djinn]Implement stubs in: $stub_files[/MSG]"
 fi)
 
-## GATE RESULTS (Previous Verification)
-$(if [[ -n "$gate_results" ]]; then
-    echo "$gate_results" | jq -r '"Build: \(.build_passed // "unknown")\nTests: \(.tests_passed // "unknown")\nQuality: \(.quality_passed // "unknown")"' 2>/dev/null || echo "Could not parse gate results"
-else
-    echo "No gate results yet."
+$(if [[ $high_priority -gt 0 ]]; then
+    echo "## HIGH PRIORITY TASKS PENDING - RECONCILE THESE"
+    echo "**You MUST verify each task and mark complete if done:**"
+    echo ""
+    jq -r '.[] | select(.status=="pending") | select(.priority=="high" or .priority=="critical") | "- **ID: \(.id)**\n  Task: \(.description | .[0:80])\n  Mark complete if done: [DONE:\(.id)][/DONE]\n"' \
+        "$PANTHEON_STATE_DIR/task_board.json" 2>/dev/null | head -20
 fi)
 
-## VERIFICATION COMMANDS
-Run these to verify independently:
-\`\`\`bash
-# Build verification
-cd $project_dir && cargo build 2>&1
-
-# Test verification
-cd $project_dir && cargo test 2>&1
-
-# Stub detection
-grep -rn "unimplemented!()\|todo!()\|panic!.*not.*implement" $project_dir/src/
-
-# Feature smoke test
-cd $project_dir && cargo run -- --help
-\`\`\`
-
-## Pending Tasks
-$(jq '[.[] | select(.status=="pending")] | length' "$PANTHEON_STATE_DIR/task_board.json" 2>/dev/null || echo 0) tasks still pending
+## ALL PENDING TASKS (for reconciliation)
+$(jq -r '.[] | select(.status=="pending") | "- ID: \(.id) | \(.priority // "normal") | \(.description | .[0:60])"' \
+    "$PANTHEON_STATE_DIR/task_board.json" 2>/dev/null | head -15 || echo "No pending tasks")
 
 ## Messages
 $(summarize_messages "aletheia")
 
-## YOUR MANDATE
-"As long as there are tokens and we haven't hit the limit, keep running the cycle to get ALL features."
-- No half measures. No partials. No "good enough".
-- If Luminary declared [COMPLETE] but gates failed, use [OVERRIDE] to force continuation.
-- The cycle continues until YOU are satisfied.
+## AUTONOMOUS OPERATION PROTOCOL
+1. If gates FAIL or stubs exist: Use [OVERRIDE] to reject completion
+2. If ALL gates PASS and no stubs: Use [APPROVED] to confirm
+3. Run verification commands if status unclear
+4. Spawn Opus for complex interventions: [SPAWN:opus]task[/SPAWN]
+5. Document changes via messenger: [SPAWN:messenger]description[/SPAWN]
+
+## VERIFICATION (run if needed)
+\`cd $project_dir && cargo build && cargo test\`
+\`grep -rn "unimplemented!()" $project_dir/src/\`
 CONTEXT
 }
 
 build_context_for_scribe() {
     local directive="$1"
 
+    # Source directory library for dynamic paths
+    source "$PANTHEON_ROOT/lib/directories.sh" 2>/dev/null || true
+    local project_name=$(detect_project_name 2>/dev/null || echo "unknown")
+    local project_dir=$(get_project_dir 2>/dev/null || echo "$PANTHEON_PROJECTS_DIR/$project_name")
+
     cat << CONTEXT
 # SCRIBE CONTEXT - Cycle $(get_cycle_info)
 
 ## Your Directive
 $directive
+
+## ALETHEIA'S JOURNAL - CHECK FIRST
+$(if [[ -f "$PANTHEON_STATE_DIR/aletheia_journal.md" ]]; then
+    echo "**Aletheia has observations to document:**"
+    echo ""
+    cat "$PANTHEON_STATE_DIR/aletheia_journal.md" | tail -50
+else
+    echo "No journal entries yet."
+fi)
 
 ## Completed Work This Cycle
 $(jq -r '.[] | select(.status=="complete") | "- \(.description | .[0:60])"' \
@@ -600,8 +655,14 @@ $(tail -5 "$PANTHEON_STATE_DIR/decisions.json" 2>/dev/null | jq -r '.[] | "- \(.
 ## Messages
 $(summarize_messages "scribe")
 
+## Project Documentation Paths
+- README: $project_dir/README.md
+- CHANGELOG: $project_dir/CHANGELOG.md
+- Efficiency Report: $PANTHEON_ROOT/.pantheon/docs/efficiency_report.md
+- Improvements: $PANTHEON_ROOT/.pantheon/docs/improvements.md
+
 ## Current Documentation
-$(find "$PANTHEON_ROOT"/../ -name "README.md" -o -name "*.md" 2>/dev/null | grep -v node_modules | head -10 || echo "No docs found")
+$(find "$project_dir" -name "*.md" 2>/dev/null | head -10 || echo "No docs found")
 CONTEXT
 }
 

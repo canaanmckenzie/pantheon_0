@@ -35,7 +35,7 @@ Result: 40-60% cost reduction vs baseline, faster cycles, better quality.
 
 ---
 
-## The Seven Agents
+## The Eight Agents
 
 | Agent | Role | Model Tier |
 |-------|------|------------|
@@ -44,8 +44,39 @@ Result: 40-60% cost reduction vs baseline, faster cycles, better quality.
 | **WEAVER** | Coordination, parallel task management | Tier 3 (Haiku) |
 | **DJINN** | Implementation, code generation | Tier 2 (Sonnet) |
 | **DOCTOR** | Testing, debugging, quality assurance | Tier 2 (Sonnet) |
+| **ALETHEIA** | External supervisor, verification watchdog | Tier 0 (Opus) |
 | **SCRIBE** | Documentation, README, API docs | Tier 3 (Haiku) |
 | **CROCODILE** | State management, cleanup, compaction | Tier 3 (Haiku) |
+
+### Aletheia - The Sentinel (External Supervisor + Self-Healing)
+
+Aletheia runs **OUTSIDE** the main cycle as a separate Claude Code session with **FULL AUTONOMY**. She is the immune system of the Pantheon:
+
+- **Monitors continuously** - Watches state files, logs, agent health metrics
+- **Self-healing** - When agents fail or timeout, she diagnoses and FIXES issues directly
+- **Direct intervention** - Can edit code to fix compilation errors, not just report them
+- **Cycle control** - Restarts cycles with context injection when needed
+- **Quality enforcement** - All gates must pass before approval
+
+**Self-Healing Capabilities:**
+- Detects compilation errors and can fix them directly
+- Tracks agent health (timeouts, empty responses)
+- Injects priority directives for the next cycle
+- Applies auto-fixes for common issues (missing derives, match arms, etc.)
+
+**Starting Aletheia:**
+```bash
+./pantheon.sh aletheia
+```
+
+She launches with full tool access and will:
+1. Check compilation status immediately
+2. Fix simple issues directly
+3. Monitor agent health
+4. Restart cycles when needed
+5. Approve only when everything genuinely works
+
+Her mandate: *"I am the immune system. When cells fail, I repair them. The organism survives because I am vigilant."*
 
 ---
 
@@ -134,6 +165,7 @@ pantheon/
 ./pantheon.sh run <brief>       # Start new project
 ./pantheon.sh run ./brief.md    # Start from file
 ./pantheon.sh resume [cycles]   # Resume from checkpoint
+./pantheon.sh aletheia          # Run Aletheia as external supervisor
 ./pantheon.sh status            # Show current state
 ./pantheon.sh logs              # Show recent logs
 ./pantheon.sh config            # Show configuration
@@ -219,10 +251,26 @@ cat logs/context_sizes.log
 
 ---
 
+## Self-Healing System
+
+Pantheon includes automatic self-healing mechanisms:
+
+- **Pre-cycle health check** - Checks compilation before running expensive agent cycles
+- **Auto-fixes** - Automatically fixes common issues (missing derives, serde attributes)
+- **Agent health tracking** - Monitors for timeouts and empty responses
+- **Priority directive injection** - When issues persist, injects urgent context for agents
+- **Token efficiency tracking** - Monitors token usage per agent for optimization
+
+Key files:
+- `lib/self_heal.sh` - Self-healing library
+- `.pantheon/state/agent_health.json` - Agent health metrics
+- `.pantheon/logs/token_usage.log` - Token efficiency data
+
 ## How It Works
 
 1. **Initialization**: Pantheon reads the project brief and initializes state
-2. **Cycle Loop**: Each cycle runs agents in order:
+2. **Health Check**: Pre-cycle verification ensures code compiles
+3. **Cycle Loop**: Each cycle runs agents in order:
    - LUMINARY assesses state and sets direction
    - ARCHITECT decomposes tasks (if needed)
    - WEAVER coordinates parallel work (if available)
@@ -230,9 +278,13 @@ cat logs/context_sizes.log
    - DOCTOR tests and debugs (if untested code)
    - SCRIBE documents (periodically)
    - CROCODILE compacts state and cleans up
-3. **Spawning**: Agents can spawn focused sub-agents for parallel work
-4. **Completion**: Project completes when all tasks done or max cycles reached
-5. **Delivery**: Final code, tests, and docs in `output/`
+3. **Spawning**: Weaver and Djinn can spawn focused sub-agents for parallel work
+4. **External Supervision**: Aletheia runs separately via `./pantheon.sh aletheia`
+   - Monitors pantheon progress continuously
+   - Reviews at end of max cycles
+   - Restarts with `./pantheon.sh resume` if not satisfied
+5. **Completion**: Project completes when all quality gates pass
+6. **Delivery**: Final code, tests, and docs in `output/`
 
 ---
 

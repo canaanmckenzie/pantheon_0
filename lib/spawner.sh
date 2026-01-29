@@ -169,12 +169,18 @@ is_duplicate_spawn() {
 queue_spawn() {
     local parent=$1
     local spawn_spec=$2
-    
+    local spawn_type=${3:-"standard"}  # standard, opus, messenger
+
     # Parse spawn spec: "specialization:task"
     local specialization=$(echo "$spawn_spec" | cut -d':' -f1)
     local task=$(echo "$spawn_spec" | cut -d':' -f2-)
-    
-    # Only Weaver and Djinn can spawn
+
+    # -------------------------------------------------------------------------
+    # SPAWN AUTHORIZATION
+    # -------------------------------------------------------------------------
+    # Only Weaver and Djinn have spawn privileges (budget-limited)
+    # Aletheia now runs EXTERNALLY and does not spawn
+    # -------------------------------------------------------------------------
     if [[ "$parent" != "weaver" && "$parent" != "djinn" ]]; then
         log_warning "Spawn denied: $parent is not authorized to spawn"
         return 1
@@ -273,6 +279,8 @@ Specialization: Algorithms (data structures, optimization, complexity)"
             echo "$base
 Specialization: Systems (low-level, memory, concurrency, performance)"
             ;;
+        # NOTE: intervention specialization removed - Aletheia now runs externally
+        # and doesn't spawn agents. She restarts the pantheon via ./pantheon.sh resume
         *)
             echo "$base
 Specialization: $specialization"
@@ -288,7 +296,7 @@ spawn_subagent() {
     local parent=$1
     local task=$2
     local specialization=$3
-    
+
     # Check budget
     if ! has_spawn_budget; then
         log_warning "Spawn budget exhausted - deferring to next cycle"
@@ -478,7 +486,25 @@ spawn_subagent_async() {
     # Select model based on specialization and task
     local model=$(get_model_for_spawn "$specialization" "$task")
 
-    # Build minimal prompt
+    # Get project info dynamically
+    source "$PANTHEON_ROOT/lib/directories.sh" 2>/dev/null || true
+    local project_name=$(detect_project_name 2>/dev/null || echo "unknown")
+    local project_dir=$(get_project_dir 2>/dev/null || echo "$PANTHEON_PROJECTS_DIR/$project_name")
+
+    # Extract relevant Architect context (interfaces, architecture notes)
+    local architect_context=""
+    if [[ -f "$PANTHEON_STATE_DIR/response_architect.md" ]]; then
+        architect_context=$(grep -A20 "## Interface\|## Architecture\|## Design\|## Task" \
+            "$PANTHEON_STATE_DIR/response_architect.md" 2>/dev/null | head -50 || echo "")
+    fi
+
+    # Get compilation status if code project
+    local build_status=""
+    if [[ -f "$project_dir/Cargo.toml" ]]; then
+        build_status=$(cd "$project_dir" && cargo check 2>&1 | grep "^error" | head -5 || echo "BUILD OK")
+    fi
+
+    # Build enriched prompt with Architect context
     local prompt_file="$spawn_workdir/prompt.md"
     cat > "$prompt_file" << PROMPT
 # Task Assignment
@@ -492,16 +518,25 @@ $task
 ## Instructions
 $(get_specialization_prompt "$specialization")
 
-## Working Directory
-$PANTHEON_ROOT
+## Project Information
+- **Project**: $project_name
+- **Directory**: $project_dir
+- **Working Directory**: $PANTHEON_ROOT
 
-## Project Directory
-$PANTHEON_PROJECTS_DIR/rscan
+## Build Status
+$build_status
+$(if [[ "$build_status" != "BUILD OK" && -n "$build_status" ]]; then
+    echo "**WARNING: Fix compilation errors first if they affect your task!**"
+fi)
+
+## Architect's Design Context
+$architect_context
 
 ## Output Location
 $spawn_workdir/
 
 CRITICAL: Execute the task completely. Write real code, not stubs.
+If build errors exist that relate to your task, fix them FIRST.
 PROMPT
 
     # Execute with selected model

@@ -20,14 +20,13 @@ You have FULL TOOL ACCESS via Claude Code. Execute directly - write actual code,
 
 **When you finish implementing something, you MUST mark it done:**
 
-```markdown
+```
 [DONE]Create user authentication module[/DONE]
 [DONE]Implement the checkout API[/DONE]
 ```
 
 Or by task ID if you have it:
-
-```markdown
+```
 [DONE:task_abc123]
 ```
 
@@ -54,8 +53,7 @@ Or by task ID if you have it:
 ## Output Protocol - CRITICAL
 
 **For every task completed:**
-
-```markdown
+```
 [ARTIFACT:path/to/file.ext]
 
 [DONE]description of task you completed[/DONE]
@@ -64,14 +62,12 @@ Or by task ID if you have it:
 ```
 
 **For spawning parallel work:**
-
-```markdown
+```
 [SPAWN]backend:Implement specific subtask[/SPAWN]
 ```
 
 **For continuation (large tasks):**
-
-```markdown
+```
 [CONTINUE]
 What's done: Created models and base API
 What remains: Add validation, tests
@@ -81,7 +77,7 @@ Key files: src/models.py, src/api.py
 
 ## Example Output
 
-```markdown
+```
 I implemented the user authentication system.
 
 [ARTIFACT:src/auth/models.py]
