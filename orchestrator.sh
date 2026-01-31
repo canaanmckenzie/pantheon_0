@@ -58,7 +58,8 @@ source "$PANTHEON_ROOT/lib/self_heal.sh"
 MAX_CYCLES="${PANTHEON_MAX_CYCLES:-10}"
 
 # Maximum spawns per cycle (override with PANTHEON_MAX_SPAWNS_PER_CYCLE)
-export PANTHEON_MAX_SPAWNS_PER_CYCLE="${PANTHEON_MAX_SPAWNS_PER_CYCLE:-3}"
+# Increased from 3 to 8 for more parallel Djinn work
+export PANTHEON_MAX_SPAWNS_PER_CYCLE="${PANTHEON_MAX_SPAWNS_PER_CYCLE:-8}"
 
 # Agent timeout in seconds (increased for implementation agents)
 AGENT_TIMEOUT="${PANTHEON_AGENT_TIMEOUT:-300}"
@@ -163,7 +164,15 @@ init_pantheon() {
 run_agent() {
     local agent_name=$1
     local directive="$2"
-    
+
+    # -------------------------------------------------------------------------
+    # STEP 0: Check if already completed in resume mode
+    # -------------------------------------------------------------------------
+    if should_skip_agent_in_resume "$agent_name"; then
+        log_info "$agent_name already completed this cycle (resuming)"
+        return 0
+    fi
+
     # -------------------------------------------------------------------------
     # STEP 1: Check if agent should run (CONDITIONAL EXECUTION)
     # -------------------------------------------------------------------------
@@ -174,6 +183,12 @@ run_agent() {
             return 0
         fi
     fi
+
+    # -------------------------------------------------------------------------
+    # STEP 1.5: Track current agent for mid-cycle resume
+    # -------------------------------------------------------------------------
+    local cycle=$(cat "$PANTHEON_STATE_DIR/cycle_count" 2>/dev/null || echo 0)
+    set_current_agent "$agent_name" "$cycle"
     
     # -------------------------------------------------------------------------
     # STEP 2: Select model based on agent and task (MODEL TIERING)
@@ -290,6 +305,10 @@ run_agent() {
     # Track agent health and token usage (self-healing metrics)
     track_agent_health "$agent_name" "$duration" 2>/dev/null || true
     log_token_usage "$agent_name" 2>/dev/null || true
+
+    # Mark agent as complete in this cycle's progress (for mid-cycle resume)
+    mark_agent_in_cycle_complete "$agent_name"
+    clear_current_agent
 
     log_success "$agent_name complete (${duration}s)"
     return 0

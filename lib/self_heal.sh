@@ -41,7 +41,10 @@ check_compilation() {
             ;;
         python)
             if [[ -f "$project_dir/setup.py" ]] || [[ -f "$project_dir/pyproject.toml" ]]; then
-                output=$(cd "$project_dir" && python -m py_compile $(find . -name "*.py" -type f) 2>&1)
+                # Use python3 explicitly since 'python' may not exist
+                local python_cmd="python3"
+                command -v python3 >/dev/null 2>&1 || python_cmd="python"
+                output=$(cd "$project_dir" && $python_cmd -m py_compile $(find . -name "*.py" -type f 2>/dev/null) 2>&1)
                 [[ -n "$output" ]] && status=1
             fi
             ;;

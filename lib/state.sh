@@ -100,6 +100,98 @@ get_agent_status() {
 }
 
 # =============================================================================
+# CYCLE STATE TRACKING (for mid-cycle resume)
+# =============================================================================
+
+set_current_agent() {
+    local agent_name=$1
+    local cycle=$2
+    local start_time=$(date +%s)
+
+    cat > "$STATE_DIR/current_agent.json" << EOF
+{
+    "agent": "$agent_name",
+    "cycle": $cycle,
+    "started": $start_time,
+    "started_iso": "$(date -Iseconds)"
+}
+EOF
+}
+
+clear_current_agent() {
+    rm -f "$STATE_DIR/current_agent.json"
+}
+
+get_current_agent() {
+    if [[ -f "$STATE_DIR/current_agent.json" ]]; then
+        jq -r '.agent' "$STATE_DIR/current_agent.json"
+    else
+        echo ""
+    fi
+}
+
+get_cycle_resume_point() {
+    # Returns the agent to resume from (empty string if none)
+    if [[ -f "$STATE_DIR/current_agent.json" ]]; then
+        local agent=$(jq -r '.agent' "$STATE_DIR/current_agent.json")
+        local started=$(jq -r '.started' "$STATE_DIR/current_agent.json")
+        local now=$(date +%s)
+        local elapsed=$((now - started))
+
+        # If agent was running for > 30 seconds, it probably got interrupted
+        if [[ $elapsed -gt 30 ]]; then
+            echo "$agent"
+        fi
+    fi
+    echo ""
+}
+
+mark_agent_in_cycle_complete() {
+    local agent_name=$1
+    local cycle_file="$STATE_DIR/cycle_progress.json"
+    local cycle=$(cat "$STATE_DIR/cycle_count" 2>/dev/null || echo 0)
+
+    # Initialize if doesn't exist
+    if [[ ! -f "$cycle_file" ]]; then
+        echo '{}' > "$cycle_file"
+    fi
+
+    # Mark agent as complete for this cycle
+    local updated=$(jq --arg cycle "$cycle" --arg agent "$agent_name" \
+        '.[$cycle] = ((.[$cycle] // []) + [$agent] | unique)' "$cycle_file")
+    echo "$updated" > "$cycle_file"
+}
+
+get_completed_agents_this_cycle() {
+    local cycle=$(cat "$STATE_DIR/cycle_count" 2>/dev/null || echo 0)
+    local cycle_file="$STATE_DIR/cycle_progress.json"
+
+    if [[ -f "$cycle_file" ]]; then
+        jq -r --arg cycle "$cycle" '.[$cycle] // [] | .[]' "$cycle_file" 2>/dev/null
+    fi
+}
+
+should_skip_agent_in_resume() {
+    local agent_name=$1
+    local completed=$(get_completed_agents_this_cycle)
+
+    if echo "$completed" | grep -q "^${agent_name}$"; then
+        return 0  # true, skip
+    fi
+    return 1  # false, don't skip
+}
+
+reset_cycle_progress() {
+    local cycle=$(cat "$STATE_DIR/cycle_count" 2>/dev/null || echo 0)
+    local cycle_file="$STATE_DIR/cycle_progress.json"
+
+    if [[ -f "$cycle_file" ]]; then
+        local updated=$(jq --arg cycle "$cycle" 'del(.[$cycle])' "$cycle_file")
+        echo "$updated" > "$cycle_file"
+    fi
+}
+
+# =============================================================================
 # TASK MANAGEMENT
 # =============================================================================
 

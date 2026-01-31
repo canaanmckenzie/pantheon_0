@@ -4,17 +4,22 @@
 
 Pantheon is a shell-based orchestration system that coordinates multiple AI agents to autonomously build software projects. Each agent has a specialized role, and they communicate through a shared state system to deliver complete, tested, documented code.
 
+**Version 11** - Optimized for token efficiency and self-healing resilience.
+
 ---
 
 ## Quick Start
 
 ```bash
 # Make executable
-chmod +x pantheon.sh orchestrator.sh
+chmod +x pantheon.sh orchestrator.sh templecat.sh
 chmod +x lib/*.sh
 
 # Run with a project brief
 ./pantheon.sh run "Build a REST API for managing tasks"
+
+# Start Templecat guardian (monitors and self-heals)
+./templecat.sh --daemon
 
 # Check status
 ./pantheon.sh status
@@ -27,9 +32,7 @@ chmod +x lib/*.sh
 
 ## Vision & Philosophy
 
-**→ [Read the full VISION](./docs/VISION.md)** for the philosophy, architecture, and long-term roadmap.
-
-In brief: Pantheon is built on **specialization**, **model-appropriate routing**, **conditional execution**, and **smart context building**. Each agent does one thing exceptionally well. Work routes to the cheapest model that can handle it. Agents only run when there's actual work. Context is lean and focused.
+Pantheon is built on **specialization**, **model-appropriate routing**, **conditional execution**, and **smart context building**. Each agent does one thing exceptionally well. Work routes to the cheapest model that can handle it. Agents only run when there's actual work. Context is lean and focused.
 
 Result: 40-60% cost reduction vs baseline, faster cycles, better quality.
 
@@ -43,12 +46,55 @@ Result: 40-60% cost reduction vs baseline, faster cycles, better quality.
 | **ARCHITECT** | System design, task decomposition | Tier 2 (Sonnet) |
 | **WEAVER** | Coordination, parallel task management | Tier 3 (Haiku) |
 | **DJINN** | Implementation, code generation | Tier 2 (Sonnet) |
-| **DOCTOR** | Testing, debugging, quality assurance | Tier 2 (Sonnet) |
+| **DOCTOR** | Testing, debugging, quality assurance | Tier 0 (Opus) |
 | **ALETHEIA** | External supervisor, verification watchdog | Tier 0 (Opus) |
 | **SCRIBE** | Documentation, README, API docs | Tier 3 (Haiku) |
 | **CROCODILE** | State management, cleanup, compaction | Tier 3 (Haiku) |
 
-### Aletheia - The Sentinel (External Supervisor + Self-Healing)
+---
+
+## Templecat Guardian
+
+Templecat is the **heartbeat** of the Pantheon - a guardian daemon that monitors system health and triggers self-healing when issues occur.
+
+### Starting Templecat
+
+```bash
+# Start as daemon (recommended)
+./templecat.sh --daemon
+
+# Brief mode (quick health check)
+./templecat.sh --brief
+
+# Stop the guardian
+./templecat.sh --stop
+
+# Check status
+./templecat.sh --status
+```
+
+### How It Works
+
+1. **Continuous Monitoring** - Checks Pantheon logs every 30 seconds
+2. **Stall Detection** - Detects when agents hang or cycles stall (configurable threshold)
+3. **Smart Detection** - Checks if Claude processes are actually running before declaring stall
+4. **Self-Healing** - Spawns Aletheia to diagnose and fix issues
+5. **Helper Djinns** - Can spawn focused helper agents for stuck tasks
+
+### Configuration
+
+In `pantheon.conf`:
+```bash
+# Templecat stall threshold (seconds before declaring stall)
+TEMPLECAT_STALL=600
+
+# Check interval (how often to check health)
+TEMPLECAT_INTERVAL=30
+```
+
+---
+
+## Aletheia - The Sentinel
 
 Aletheia runs **OUTSIDE** the main cycle as a separate Claude Code session with **FULL AUTONOMY**. She is the immune system of the Pantheon:
 
@@ -58,23 +104,10 @@ Aletheia runs **OUTSIDE** the main cycle as a separate Claude Code session with 
 - **Cycle control** - Restarts cycles with context injection when needed
 - **Quality enforcement** - All gates must pass before approval
 
-**Self-Healing Capabilities:**
-- Detects compilation errors and can fix them directly
-- Tracks agent health (timeouts, empty responses)
-- Injects priority directives for the next cycle
-- Applies auto-fixes for common issues (missing derives, match arms, etc.)
-
 **Starting Aletheia:**
 ```bash
 ./pantheon.sh aletheia
 ```
-
-She launches with full tool access and will:
-1. Check compilation status immediately
-2. Fix simple issues directly
-3. Monitor agent health
-4. Restart cycles when needed
-5. Approve only when everything genuinely works
 
 Her mandate: *"I am the immune system. When cells fail, I repair them. The organism survives because I am vigilant."*
 
@@ -82,22 +115,23 @@ Her mandate: *"I am the immune system. When cells fail, I repair them. The organ
 
 ## Key Optimizations
 
-Pantheon is optimized for **sustainable operation** - using minimum resources to get the job done.
-
 ### 1. Model Tiering (40-60% cost reduction)
 Routes each task to the cheapest model that can handle it. Strategic decisions use Sonnet; routine work uses Haiku (10-20x cheaper).
 
 ### 2. Conditional Execution (20-30% fewer API calls)
-Agents only run when there's actual work. Architect skips if no tasks need decomposition. Doctor skips if no untested code exists.
+Agents only run when there's actual work. Architect skips if no tasks need decomposition.
 
-### 3. Smart Context Building (30-40% fewer input tokens)
-Each agent gets tailored context with only what they need, not a full state dump.
+### 3. Smart Context Building (50-70% fewer input tokens)
+- Task summaries show **top 15 priority items only** (not all tasks)
+- Descriptions truncated to 60 chars
+- Each agent gets tailored context with only what they need
+- No raw JSON dumps - human-readable summaries
 
 ### 4. Spawn Budget Controls (50-70% spawn cost reduction)
 Maximum 3 spawns per cycle. Quality over quantity. Most spawn work uses Haiku.
 
-### 5. Compressed Agent Prompts (30-40% fewer prompt tokens)
-Removed inline code examples that taught Claude things it already knows.
+### 5. Mid-Cycle Resume
+Tracks which agents completed within a cycle. On restart, skips already-completed agents.
 
 **Combined effect**: A cycle that would cost 100 "rate limit units" now costs 15-30 units.
 
@@ -105,25 +139,32 @@ Removed inline code examples that taught Claude things it already knows.
 
 ## Configuration
 
-Create `pantheon.conf` for persistent settings:
+Edit `pantheon.conf`:
 
 ```bash
-# Model assignments
+# Templecat Guardian
+TEMPLECAT_STALL=600          # Seconds before stall detection
+
+# Model tiers (use correct model names!)
+PANTHEON_MODEL_TIER0=claude-opus-4-20250514
 PANTHEON_MODEL_TIER1=claude-sonnet-4-20250514
 PANTHEON_MODEL_TIER2=claude-sonnet-4-20250514
-PANTHEON_MODEL_TIER3=claude-haiku-4-20250514
+PANTHEON_MODEL_TIER3=claude-3-5-haiku-20241022
+
+# Timeouts
+PANTHEON_AGENT_TIMEOUT=600   # 10 min per agent
+PANTHEON_SPAWN_TIMEOUT=300   # 5 min per spawn
 
 # Limits
-PANTHEON_MAX_CYCLES=10
+PANTHEON_MAX_CYCLES=5
 PANTHEON_MAX_SPAWNS_PER_CYCLE=3
-PANTHEON_AGENT_TIMEOUT=120
-PANTHEON_SPAWN_TIMEOUT=180
+
+# Verification
+PANTHEON_REQUIRE_VERIFICATION=true
+PANTHEON_VERIFICATION_STEPS=build,tests,smoke
 ```
 
-Override at runtime:
-```bash
-PANTHEON_MAX_SPAWNS_PER_CYCLE=5 ./pantheon.sh run "Build something complex"
-```
+**Important**: Claude 4 Haiku does not exist. Use `claude-3-5-haiku-20241022` for Tier 3.
 
 ---
 
@@ -133,7 +174,8 @@ PANTHEON_MAX_SPAWNS_PER_CYCLE=5 ./pantheon.sh run "Build something complex"
 pantheon/
 ├── pantheon.sh          # Main launcher
 ├── orchestrator.sh      # Orchestration engine
-├── pantheon.conf        # Configuration (create this)
+├── templecat.sh         # Guardian daemon
+├── pantheon.conf        # Configuration
 │
 ├── agents/              # Agent personality definitions
 │   ├── luminary.md, architect.md, weaver.md
@@ -144,17 +186,19 @@ pantheon/
 │   ├── context.sh       # Smart context building
 │   ├── conditional.sh   # Conditional execution
 │   ├── spawner.sh       # Spawn budget controls
-│   ├── state.sh         # State management
+│   ├── state.sh         # State management + mid-cycle resume
 │   ├── messaging.sh     # Inter-agent messaging
+│   ├── self_heal.sh     # Self-healing utilities
 │   ├── colors.sh        # Terminal colors
 │   └── logging.sh       # Logging utilities
 │
-├── state/               # Runtime state (regenerated)
-├── spawn/               # Agent workspaces (regenerated)
-├── logs/                # Logs and metrics
-├── output/              # Final deliverables
-├── artifacts/           # Cycle reports and blueprints
-└── docs/                # Documentation
+├── .pantheon/           # Runtime (auto-generated)
+│   ├── state/           # Task board, artifacts, messages
+│   ├── logs/            # Pantheon logs, token usage
+│   └── spawn/           # Worker workspaces
+│
+├── projects/            # Generated project code
+└── output/              # Final deliverables
 ```
 
 ---
@@ -170,65 +214,56 @@ pantheon/
 ./pantheon.sh logs              # Show recent logs
 ./pantheon.sh config            # Show configuration
 ./pantheon.sh clean             # Reset all state
-./pantheon.sh distill           # Run improvement cycle
+
+./templecat.sh --daemon         # Start guardian
+./templecat.sh --stop           # Stop guardian
+./templecat.sh --status         # Check guardian status
 ```
-
----
-
-## Demo Project: rscan
-
-Pantheon was tested by building **rscan**, a Rust-based port scanner similar to nmap.
-
-### Project Brief
-```
-Build a standalone nmap-like port scanner CLI in Rust. Features:
-- TCP connect scanning
-- Configurable port ranges
-- Host discovery (ping)
-- Concurrent scanning with adjustable thread count
-- Timeout handling
-- Clean CLI output showing open/closed/filtered ports
-```
-
-### Run Command
-```bash
-./pantheon.sh run "Build rscan port scanner" --cycles 5
-```
-
-### Results
-See `output/` for the generated project after a successful run.
-
----
-
-## Documentation
-
-- **[VISION.md](./docs/VISION.md)** - Complete vision, philosophy, and roadmap
-- **[CHANGELOG.md](./CHANGELOG.md)** - All changes, decisions, and project history
-- **[README.md](./README.md)** - This file, quick start and command reference
-- **.pantheon/state/** - Runtime state files (internal, regenerated per cycle)
 
 ---
 
 ## Monitoring
 
+### Live Monitoring
+```bash
+# Watch pantheon logs
+tail -f .pantheon/logs/pantheon.log
+
+# Watch templecat
+tail -f .pantheon/logs/templecat.log
+
+# Watch both
+tail -f .pantheon/logs/*.log
+```
+
 ### Token Usage
 ```bash
-cat logs/model_selection.log
-# [timestamp] agent=luminary complexity=normal model=sonnet
-# [timestamp] agent=weaver complexity=simple model=haiku
+cat .pantheon/logs/token_usage.log
+# [timestamp] agent=djinn input=2369 output=774 total=3143 tasks=6 efficiency=1
 ```
 
-### Agent Skips
+### Model Selection
 ```bash
-cat logs/agent_skips.log
-# [timestamp] SKIP architect: No undecomposed tasks
+cat .pantheon/logs/model_selection.log
+# [timestamp] agent=weaver complexity=normal model=claude-3-5-haiku-20241022
 ```
 
-### Context Sizes
-```bash
-cat logs/context_sizes.log
-# [timestamp] agent=djinn chars=2400 est_tokens=600
-```
+---
+
+## Self-Healing System
+
+Pantheon includes multiple self-healing layers:
+
+1. **Templecat Guardian** - External daemon monitoring for stalls
+2. **Smart Stall Detection** - Checks if Claude is actually running before declaring stall
+3. **Mid-Cycle Resume** - Tracks which agents completed, resumes from interruption point
+4. **Helper Djinns** - Spawns focused workers for stuck agents
+5. **Aletheia Intervention** - Full diagnostic and repair capability
+
+### Health Files
+- `.pantheon/state/agent_health.json` - Agent health metrics
+- `.pantheon/state/current_agent.json` - Current running agent
+- `.pantheon/logs/token_usage.log` - Token efficiency data
 
 ---
 
@@ -236,55 +271,25 @@ cat logs/context_sizes.log
 
 ### Hitting rate limits?
 1. Reduce spawn budget: `PANTHEON_MAX_SPAWNS_PER_CYCLE=2`
-2. Use more Haiku: Set `PANTHEON_MODEL_TIER2=claude-haiku-4-20250514`
+2. Use longer timeouts: `PANTHEON_AGENT_TIMEOUT=600`
 3. Reduce cycles: `./pantheon.sh run "brief" --cycles 3`
 
-### Agents not doing enough?
-1. Force agent: `touch state/force_architect`
-2. Increase spawn budget for complex projects
-3. Check `logs/agent_skips.log` for skip reasons
+### Agents timing out?
+1. Increase timeout: `PANTHEON_AGENT_TIMEOUT=600`
+2. Increase stall threshold: `TEMPLECAT_STALL=600`
+3. Check if tasks are too large (need decomposition)
 
-### Quality issues?
-1. Use more Sonnet for Tier 2
-2. Increase spawn budget
-3. Run more cycles: `./pantheon.sh resume 10`
+### Haiku agents returning errors?
+Ensure you're using the correct model name:
+```bash
+PANTHEON_MODEL_TIER3=claude-3-5-haiku-20241022  # Correct
+# NOT: claude-haiku-4-20250514 (doesn't exist!)
+```
 
----
-
-## Self-Healing System
-
-Pantheon includes automatic self-healing mechanisms:
-
-- **Pre-cycle health check** - Checks compilation before running expensive agent cycles
-- **Auto-fixes** - Automatically fixes common issues (missing derives, serde attributes)
-- **Agent health tracking** - Monitors for timeouts and empty responses
-- **Priority directive injection** - When issues persist, injects urgent context for agents
-- **Token efficiency tracking** - Monitors token usage per agent for optimization
-
-Key files:
-- `lib/self_heal.sh` - Self-healing library
-- `.pantheon/state/agent_health.json` - Agent health metrics
-- `.pantheon/logs/token_usage.log` - Token efficiency data
-
-## How It Works
-
-1. **Initialization**: Pantheon reads the project brief and initializes state
-2. **Health Check**: Pre-cycle verification ensures code compiles
-3. **Cycle Loop**: Each cycle runs agents in order:
-   - LUMINARY assesses state and sets direction
-   - ARCHITECT decomposes tasks (if needed)
-   - WEAVER coordinates parallel work (if available)
-   - DJINN implements code (if tasks pending)
-   - DOCTOR tests and debugs (if untested code)
-   - SCRIBE documents (periodically)
-   - CROCODILE compacts state and cleans up
-3. **Spawning**: Weaver and Djinn can spawn focused sub-agents for parallel work
-4. **External Supervision**: Aletheia runs separately via `./pantheon.sh aletheia`
-   - Monitors pantheon progress continuously
-   - Reviews at end of max cycles
-   - Restarts with `./pantheon.sh resume` if not satisfied
-5. **Completion**: Project completes when all quality gates pass
-6. **Delivery**: Final code, tests, and docs in `output/`
+### System stalling?
+1. Check Templecat status: `./templecat.sh --status`
+2. Check for stuck processes: `pgrep -af claude`
+3. Manual restart: `./templecat.sh --stop && ./pantheon.sh resume 5`
 
 ---
 

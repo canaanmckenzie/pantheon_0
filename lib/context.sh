@@ -72,14 +72,17 @@ summarize_task_board() {
             echo "## Task Summary"
             echo "- Total: $total"
             echo "- Pending: $pending"
-            echo "- In Progress: $in_progress"  
+            echo "- In Progress: $in_progress"
             echo "- Complete: $complete"
             echo ""
-            
-            # Show only pending/in-progress tasks (not completed)
+
+            # Show top 15 priority tasks only (prevents context bloat)
             if [[ $pending -gt 0 || $in_progress -gt 0 ]]; then
-                echo "### Active Tasks"
-                jq -r '.[] | select(.status=="pending" or .status=="in_progress") | "- [\(.status)] \(.description | .[0:80])"' "$task_file" 2>/dev/null
+                echo "### Active Tasks (top 15)"
+                jq -r '[.[] | select(.status=="pending" or .status=="in_progress")] | sort_by(.priority // "medium") | .[0:15] | .[] | "- [\(.status)] \(.description | .[0:60])"' "$task_file" 2>/dev/null
+                if [[ $pending -gt 15 ]]; then
+                    echo "... and $((pending - 15)) more pending tasks"
+                fi
             fi
             ;;
         full)
@@ -288,8 +291,8 @@ $directive
 ## Project Brief
 $(cat "$PANTHEON_STATE_DIR/project_brief.md" 2>/dev/null | head -100)
 
-## Task Board (Full)
-$(summarize_task_board "full")
+## Task Board
+$(summarize_task_board "summary")
 
 ## Artifact Structure
 $(summarize_artifacts "summary")
@@ -363,7 +366,7 @@ $(if [[ -n "$priority_directive" ]]; then
 fi)
 
 ## Active Tasks for Implementation
-$(jq -r '.[] | select(.status=="pending" or .status=="in_progress") | select(.type=="implementation" or .type=="feature" or .type==null) | "- \(.description)"' \
+$(jq -r '.[] | select(.status=="pending" or .status=="in_progress") | select(.type=="implementation" or .type=="feature" or .type=="general" or .type==null) | "- \(.description)"' \
     "$PANTHEON_STATE_DIR/task_board.json" 2>/dev/null || echo "No implementation tasks")
 
 ## Existing Artifacts (for context)

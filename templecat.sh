@@ -25,7 +25,7 @@ ALETHEIA_PROMPT="$SCRIPT_DIR/agents/aletheia.md"
 
 # Configuration
 CHECK_INTERVAL="${TEMPLECAT_INTERVAL:-30}"
-STALL_THRESHOLD="${TEMPLECAT_STALL:-300}"
+STALL_THRESHOLD="${TEMPLECAT_STALL:-600}"
 MAX_RESTARTS="${TEMPLECAT_MAX_RESTARTS:-10}"
 CYCLES_PER_RESTART="${TEMPLECAT_CYCLES:-3}"
 
@@ -77,6 +77,29 @@ get_last_log_line() {
 
 is_pantheon_running() {
     pgrep -f "orchestrator.sh" > /dev/null 2>&1
+}
+
+is_claude_active() {
+    # Check if any Claude process is actively running (for the orchestrator)
+    pgrep -f "claude.*--print.*--model" > /dev/null 2>&1
+}
+
+get_current_agent() {
+    # Get which agent is currently running from state
+    if [[ -f "$STATE_DIR/current_agent.json" ]]; then
+        jq -r '.agent // ""' "$STATE_DIR/current_agent.json" 2>/dev/null
+    fi
+}
+
+get_agent_runtime() {
+    # Get how long current agent has been running
+    if [[ -f "$STATE_DIR/current_agent.json" ]]; then
+        local started=$(jq -r '.started // 0' "$STATE_DIR/current_agent.json" 2>/dev/null)
+        local now=$(date +%s)
+        echo $((now - started))
+    else
+        echo 0
+    fi
 }
 
 is_project_complete() {
@@ -226,6 +249,61 @@ EOF
 }
 
 # =============================================================================
+# SPAWN HELPER DJINN
+# =============================================================================
+# When an agent is struggling (running too long), spawn a helper Djinn
+# to tackle part of the workload. Results merge back via the task board.
+# =============================================================================
+
+spawn_helper_djinn() {
+    local struggling_agent="$1"
+    local helper_log="$LOGS_DIR/helper_djinn_$(date +%Y%m%d_%H%M%S).log"
+
+    log INFO "Spawning helper Djinn for struggling $struggling_agent"
+
+    # Get pending high-priority tasks
+    local pending_tasks=$(jq -r '[.[] | select(.status=="pending") | select(.priority=="high")] | .[0:2] | .[].description' \
+        "$STATE_DIR/task_board.json" 2>/dev/null | head -2)
+
+    if [[ -z "$pending_tasks" ]]; then
+        log INFO "No high-priority tasks to delegate"
+        return 0
+    fi
+
+    local helper_prompt="# HELPER DJINN - Emergency Spawn
+
+You are a helper Djinn spawned by Templecat because agent $struggling_agent is taking too long.
+
+## YOUR MISSION
+Pick ONE of these high-priority tasks and complete it QUICKLY:
+
+$pending_tasks
+
+## RULES
+1. Complete the task fully - write working code
+2. Mark it done with [DONE]task description[/DONE]
+3. Register artifacts with [ARTIFACT:path]
+4. Be fast and focused
+
+## PATHS
+- Project: $SCRIPT_DIR/projects/
+- State: $STATE_DIR
+
+GO!"
+
+    # Spawn helper in background (limited timeout for focused work)
+    timeout 300 claude --print --model sonnet \
+        --dangerously-skip-permissions \
+        -p "$helper_prompt" > "$helper_log" 2>&1 &
+
+    local helper_pid=$!
+    log INFO "Helper Djinn spawned (PID: $helper_pid, log: $helper_log)"
+
+    # Don't wait - let it run in parallel
+    echo "$helper_pid" >> "$STATE_DIR/helper_pids.txt"
+}
+
+# =============================================================================
 # INVOKE ALETHEIA
 # =============================================================================
 # Templecat calls upon Aletheia when intervention is needed.
@@ -238,6 +316,10 @@ invoke_aletheia() {
 
     log ALETHEIA "Templecat invokes Aletheia: $issue"
 
+    # Get current agent info for context
+    local current_agent=$(get_current_agent)
+    local agent_runtime=$(get_agent_runtime)
+
     # Build context for Aletheia
     local aletheia_context="# ALETHEIA - You Have Been Summoned
 
@@ -245,6 +327,11 @@ invoke_aletheia() {
 
 ## THE ISSUE
 $issue
+
+## CURRENT STATE
+- Cycle: $(get_cycle_count)
+- Agent that was running: ${current_agent:-unknown}
+- Agent runtime: ${agent_runtime}s
 
 ## DIAGNOSTICS FROM TEMPLECAT
 $(cat "$diag_file")
@@ -257,15 +344,24 @@ You have FULL AUTONOMY and FULL TOOL ACCESS.
 1. Analyze the diagnostics above
 2. Identify the root cause
 3. FIX THE PROBLEM DIRECTLY
-4. Verify your fix works (run \`cargo check\` or equivalent)
+4. Verify your fix works (run tests or equivalent)
+5. If the fix is done, Pantheon will auto-resume from where it left off
 
 Do not just explain what to do. DO IT.
+
+## IMPORTANT: Progress Preservation
+The system now tracks which agents completed. When you're done fixing:
+- Pantheon will resume from the agent that was stuck
+- Completed agents won't re-run
+- No work is lost
 
 ## PATHS
 - Working directory: $SCRIPT_DIR
 - Project: $SCRIPT_DIR/projects/
 - State: $STATE_DIR
 - Logs: $LOGS_DIR
+- Current agent state: $STATE_DIR/current_agent.json
+- Cycle progress: $STATE_DIR/cycle_progress.json
 
 Templecat is waiting. Fix this and return control."
 
@@ -308,7 +404,7 @@ Templecat is waiting. Fix this and return control."
 # =============================================================================
 
 watch_loop() {
-    local brief="$1"
+    local brief="${1:-}"
     local restart_count=0
     local last_cycle=0
     local stall_detected=false
@@ -389,23 +485,60 @@ watch_loop() {
                 break
             fi
         else
-            # Check for stalls
+            # =================================================================
+            # SMART STALL DETECTION
+            # =================================================================
+            # Don't just check log time - check if Claude is actually working
+            # A "stall" is when:
+            #   - Log hasn't been updated AND Claude isn't running
+            #   - OR an agent has been running excessively long (> 900s)
+            # =================================================================
             local current_cycle=$(get_cycle_count)
             local log_time=$(get_last_log_time)
             local now=$(date +%s)
             local idle_time=$((now - log_time))
+            local current_agent=$(get_current_agent)
+            local agent_runtime=$(get_agent_runtime)
+            local claude_active=$(is_claude_active && echo "yes" || echo "no")
 
-            if [[ $idle_time -gt $STALL_THRESHOLD ]]; then
+            # If Claude is actively running, it's not a stall
+            if [[ "$claude_active" == "yes" ]]; then
+                stall_detected=false
+
+                # But if agent running too long (>900s), consider spawning help
+                if [[ $agent_runtime -gt 900 && -n "$current_agent" ]]; then
+                    log WARN "Agent $current_agent running long (${agent_runtime}s) - spawning helper"
+                    spawn_helper_djinn "$current_agent"
+                fi
+
+                if [[ $current_cycle -ne $last_cycle ]]; then
+                    log INFO "Cycle $current_cycle in progress"
+                    last_cycle=$current_cycle
+                fi
+            elif [[ $idle_time -gt $STALL_THRESHOLD ]]; then
+                # Log is stale AND Claude isn't running = real stall
                 if [[ "$stall_detected" == "false" ]]; then
-                    log WARN "Stall detected (${idle_time}s idle)"
+                    log WARN "Stall detected (${idle_time}s idle, no Claude process)"
                     stall_detected=true
 
-                    kill_pantheon
                     local compile_status=$(get_compilation_status)
                     if [[ "$compile_status" == "FAILED" ]]; then
+                        log INFO "Invoking Aletheia for compilation errors"
                         invoke_aletheia "Pantheon stalled due to compilation errors"
+                    elif [[ -n "$current_agent" ]]; then
+                        log INFO "Agent $current_agent was stuck - invoking Aletheia"
+                        invoke_aletheia "Agent $current_agent stalled without completion - diagnose and resume"
                     else
+                        log INFO "Invoking Aletheia for unknown stall"
                         invoke_aletheia "Pantheon stalled - no obvious cause"
+                    fi
+
+                    # After Aletheia, resume from where we left off
+                    if ! is_pantheon_running; then
+                        start_pantheon "" "$CYCLES_PER_RESTART"
+                        ((restart_count++))
+                        stall_detected=false
+                        log INFO "Restart $restart_count / $MAX_RESTARTS"
                     fi
                 fi
             else
@@ -456,9 +589,13 @@ stop_templecat() {
         sleep 2
         kill "$pid" 2>/dev/null || true
         rm -f "$TEMPLECAT_PID"
+        # Clean up stop signal so it doesn't affect next start
+        rm -f "$SCRIPT_DIR/.pantheon/templecat_stop"
         log OK "Templecat sleeps"
     else
         log WARN "Templecat not running"
+        # Clean up any stale stop file
+        rm -f "$SCRIPT_DIR/.pantheon/templecat_stop"
     fi
 }
 
@@ -466,6 +603,9 @@ start_templecat() {
     local brief="$1"
 
     mkdir -p "$STATE_DIR" "$LOGS_DIR"
+
+    # Clean up stale stop signal from previous runs
+    rm -f "$SCRIPT_DIR/.pantheon/templecat_stop"
 
     if [[ -f "$TEMPLECAT_PID" ]]; then
         local pid=$(cat "$TEMPLECAT_PID")

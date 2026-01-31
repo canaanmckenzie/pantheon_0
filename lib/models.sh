@@ -29,7 +29,7 @@
 # Override defaults via environment variables:
 #   PANTHEON_MODEL_TIER1="claude-sonnet-4-20250514"   # Strategic work
 #   PANTHEON_MODEL_TIER2="claude-sonnet-4-20250514"   # Technical work  
-#   PANTHEON_MODEL_TIER3="claude-haiku-4-20250514"    # Routine work
+#   PANTHEON_MODEL_TIER3="claude-3-5-haiku-20241022"  # Routine work
 #
 # =============================================================================
 
