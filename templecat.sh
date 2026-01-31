@@ -440,10 +440,65 @@ watch_loop() {
             local compile_status=$(get_compilation_status)
             if [[ "$compile_status" == "OK" ]]; then
                 log OK "=========================================="
-                log OK "PROJECT COMPLETE"
+                log OK "PROJECT GATES PASSED - INVOKING FINAL VALIDATION"
                 log OK "=========================================="
-                log ALETHEIA "Aletheia approves: All gates passed, compilation verified"
-                break
+
+                # Invoke Aletheia for FINAL comprehensive validation
+                # This ensures the project truly functions as intended
+                local brief_content=""
+                if [[ -f "$STATE_DIR/brief.md" ]]; then
+                    brief_content=$(cat "$STATE_DIR/brief.md")
+                fi
+
+                invoke_aletheia "FINAL VALIDATION: All cycles complete and gates passed.
+
+## Your Task: COMPREHENSIVE PROJECT VALIDATION
+
+Review the project against its specification (brief.md) and verify it truly functions as intended.
+
+### Validation Checklist:
+1. **Build/Compilation**: Verify all code compiles without errors
+2. **Test Suite**: Run ALL tests and verify they pass
+3. **Integration Check**: Ensure components work together
+4. **Functionality Review**: Verify each major feature works as designed
+5. **Code Quality**: Check for stubs, TODOs, or incomplete implementations
+6. **Production Readiness**: Assess if this is truly production-grade
+7. **Spec Compliance**: Does the project meet the specification in the brief?
+
+### Project Specification (from brief.md):
+$brief_content
+
+### YOUR POWERS:
+
+**If project PASSES validation:**
+- Create file: .pantheon/state/aletheia_approved
+- Report SUCCESS - the project is complete
+
+**If project NEEDS MORE WORK:**
+- Create priority directive: .pantheon/state/priority_directive.md
+- Include specific issues that need fixing
+- Then restart with more cycles:
+  \`\`\`bash
+  ./pantheon.sh resume 3  # Add 3 more cycles
+  \`\`\`
+- DO NOT approve incomplete work - add cycles until it's RIGHT
+
+### Remember:
+The project must be AS GOOD OR BETTER than what the spec describes.
+If it's not there yet, YOU have the power to add more cycles.
+Only approve when it truly meets production-grade standards."
+
+                # Check if Aletheia approved or requested more cycles
+                if [[ -f "$STATE_DIR/aletheia_approved" ]]; then
+                    log OK "=========================================="
+                    log OK "PROJECT COMPLETE - ALETHEIA VERIFIED"
+                    log OK "=========================================="
+                    rm -f "$STATE_DIR/aletheia_approved"
+                    break
+                elif is_pantheon_running; then
+                    # Aletheia restarted cycles - continue monitoring
+                    log INFO "Aletheia requested more cycles - continuing..."
+                fi
             else
                 log WARN "Gates passed but compilation fails"
                 invoke_aletheia "Gates report passed but compilation is failing - investigate"
@@ -460,8 +515,42 @@ watch_loop() {
                 log INFO "Pantheon finished - checking gates..."
                 continue
             elif echo "$last_line" | grep -q "Rate limit"; then
-                log WARN "Rate limited - waiting 60s..."
-                sleep 60
+                # Rate limit detected - invoke Aletheia for project review
+                log WARN "Rate limit detected - invoking Aletheia for project state review"
+
+                # Create rate limit flag for tracking
+                touch "$STATE_DIR/rate_limit.flag"
+
+                # Check if this is a repeated rate limit (within 5 minutes)
+                local flag_time=$(stat -c %Y "$STATE_DIR/rate_limit.flag" 2>/dev/null || echo "0")
+                local now_ts=$(date +%s)
+                local rate_limit_count=0
+
+                if [[ -f "$STATE_DIR/rate_limit_count" ]]; then
+                    rate_limit_count=$(cat "$STATE_DIR/rate_limit_count")
+                fi
+                ((rate_limit_count++))
+                echo "$rate_limit_count" > "$STATE_DIR/rate_limit_count"
+
+                if [[ $rate_limit_count -ge 3 ]]; then
+                    # Too many rate limits - invoke Aletheia and pause
+                    log ERROR "Multiple rate limits detected ($rate_limit_count) - invoking Aletheia"
+                    invoke_aletheia "TOKEN EXHAUSTION: Rate limit hit $rate_limit_count times. Review project state, ensure ready for resume when limits reset."
+
+                    # Wait longer - 10 minutes between attempts after multiple failures
+                    log WARN "Waiting 600s before next attempt..."
+                    sleep 600
+
+                    # Reset counter after long wait
+                    echo "0" > "$STATE_DIR/rate_limit_count"
+                else
+                    # First few rate limits - shorter wait
+                    log WARN "Rate limited (attempt $rate_limit_count) - waiting 120s..."
+                    sleep 120
+                fi
+
+                # Continue loop instead of falling through to restart
+                continue
             fi
 
             if [[ $restart_count -lt $MAX_RESTARTS ]]; then

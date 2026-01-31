@@ -105,11 +105,11 @@ Aletheia (the Sentinel) runs as an external supervisor and documents her observa
 4. **Improvements Suggested** → Add to `.pantheon/docs/improvements.md`
 5. **Agent Health Issues** → Add to `.pantheon/docs/agent_health_report.md`
 
-**Example: If Aletheia fixed a compilation error:**
+**Example: If Aletheia fixed a build error:**
 ```markdown
 # In CHANGELOG.md:
 ### Fixed
-- Compilation error in src/output/results.rs - added #[serde(skip)] to Instant field (via Aletheia)
+- Build error in src/core/client - fixed missing import (via Aletheia)
 ```
 
 **Example: If Aletheia observed inefficiency:**

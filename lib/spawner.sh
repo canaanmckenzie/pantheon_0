@@ -313,6 +313,10 @@ spawn_subagent() {
     
     log_info "Spawning $specialization worker ($model): $spawn_id"
     
+    # Detect project directory
+    local project_dir=$(ls -d "$PANTHEON_ROOT/projects"/*/ 2>/dev/null | head -1)
+    project_dir="${project_dir%/}"  # Remove trailing slash
+
     # Build minimal prompt (much shorter than original)
     local prompt_file="$spawn_workdir/prompt.md"
     cat > "$prompt_file" << PROMPT
@@ -327,11 +331,16 @@ $task
 ## Instructions
 $(get_specialization_prompt "$specialization")
 
-## Working Directory
-$PANTHEON_ROOT
+## CRITICAL: Project Location
+**ALL CODE FILES must be created inside the project directory:**
+$project_dir/
 
-## Output Location
-$spawn_workdir/
+The project structure:
+- src/ - Source code
+- tests/ - Test files
+
+DO NOT create files outside the project directory.
+DO NOT create files at $PANTHEON_ROOT/ root level.
 
 CRITICAL: Produce TEXT OUTPUT ONLY. No tool usage.
 PROMPT
@@ -498,10 +507,16 @@ spawn_subagent_async() {
             "$PANTHEON_STATE_DIR/response_architect.md" 2>/dev/null | head -50 || echo "")
     fi
 
-    # Get compilation status if code project
+    # Get build status (multi-language support)
     local build_status=""
     if [[ -f "$project_dir/Cargo.toml" ]]; then
         build_status=$(cd "$project_dir" && cargo check 2>&1 | grep "^error" | head -5 || echo "BUILD OK")
+    elif [[ -f "$project_dir/pyproject.toml" ]] || [[ -f "$project_dir/setup.py" ]]; then
+        build_status=$(cd "$project_dir" && python3 -m py_compile $(find . -name "*.py" -type f 2>/dev/null | head -20) 2>&1 | head -5 || echo "BUILD OK")
+    elif [[ -f "$project_dir/package.json" ]]; then
+        build_status=$(cd "$project_dir" && npm run build 2>&1 | grep -i "error" | head -5 || echo "BUILD OK")
+    elif [[ -f "$project_dir/go.mod" ]]; then
+        build_status=$(cd "$project_dir" && go build ./... 2>&1 | head -5 || echo "BUILD OK")
     fi
 
     # Build enriched prompt with Architect context
@@ -518,10 +533,16 @@ $task
 ## Instructions
 $(get_specialization_prompt "$specialization")
 
-## Project Information
-- **Project**: $project_name
-- **Directory**: $project_dir
-- **Working Directory**: $PANTHEON_ROOT
+## CRITICAL: Project Location
+**ALL CODE FILES must be created inside the project directory:**
+$project_dir/
+
+Structure within project:
+- src/ - Source code
+- tests/ - Test files
+
+**DO NOT create files at $PANTHEON_ROOT/ root level.**
+**DO NOT create standalone directories outside the project.**
 
 ## Build Status
 $build_status
@@ -532,10 +553,8 @@ fi)
 ## Architect's Design Context
 $architect_context
 
-## Output Location
-$spawn_workdir/
-
 CRITICAL: Execute the task completely. Write real code, not stubs.
+All files go in $project_dir/ - not the root directory.
 If build errors exist that relate to your task, fix them FIRST.
 PROMPT
 

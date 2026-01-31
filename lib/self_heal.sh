@@ -147,9 +147,19 @@ is_agent_unhealthy() {
 }
 
 # =============================================================================
-# AUTO-FIXER: Simple Compilation Fixes
+# AUTO-FIXER: Simple Build/Compilation Fixes
 # =============================================================================
-# Fix common, simple compilation errors automatically
+# Fix common, simple build errors automatically.
+#
+# EXTENSIBLE BY LANGUAGE: Add autofix_<lang>_<issue>() functions as needed.
+# Current implementations:
+#   - Rust: serde_instant, missing_derive, match_arm
+#   - Python: (add autofix_python_* functions as patterns emerge)
+#   - Node:   (add autofix_node_* functions as patterns emerge)
+#   - Go:     (add autofix_go_* functions as patterns emerge)
+#
+# The run_autofixes() dispatcher calls language-specific fixes based on
+# detect_build_system() result.
 # =============================================================================
 
 autofix_rust_serde_instant() {

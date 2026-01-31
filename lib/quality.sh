@@ -87,6 +87,23 @@ detect_stubs() {
         '\.\.\.  # placeholder'
     )
 
+    # JavaScript/TypeScript stub patterns
+    local js_patterns=(
+        "throw new Error.*not implemented"
+        "throw new Error.*TODO"
+        "// TODO.*implement"
+        "console\.log.*TODO"
+        "return null.*// stub"
+    )
+
+    # Go stub patterns
+    local go_patterns=(
+        'panic\("not implemented'
+        'panic\("TODO'
+        "// TODO.*implement"
+        "return nil.*// stub"
+    )
+
     # General patterns (comments indicating incomplete work)
     local general_patterns=(
         "FIXME.*critical"
@@ -119,6 +136,34 @@ detect_stubs() {
     # Check Python source files
     for pattern in "${python_patterns[@]}"; do
         local matches=$(grep -rn --include="*.py" -E "$pattern" "$project_dir" 2>/dev/null || true)
+        if [[ -n "$matches" ]]; then
+            echo "" | tee -a "$stub_log"
+            echo "**FOUND**: Pattern '$pattern'" | tee -a "$stub_log"
+            echo "$matches" | tee -a "$stub_log"
+            ((stubs_found++))
+        fi
+    done
+
+    echo "" | tee -a "$stub_log"
+    echo "### JavaScript/TypeScript Stub Detection" | tee -a "$stub_log"
+
+    # Check JavaScript/TypeScript source files
+    for pattern in "${js_patterns[@]}"; do
+        local matches=$(grep -rn --include="*.js" --include="*.ts" --include="*.jsx" --include="*.tsx" -E "$pattern" "$project_dir" 2>/dev/null || true)
+        if [[ -n "$matches" ]]; then
+            echo "" | tee -a "$stub_log"
+            echo "**FOUND**: Pattern '$pattern'" | tee -a "$stub_log"
+            echo "$matches" | tee -a "$stub_log"
+            ((stubs_found++))
+        fi
+    done
+
+    echo "" | tee -a "$stub_log"
+    echo "### Go Stub Detection" | tee -a "$stub_log"
+
+    # Check Go source files
+    for pattern in "${go_patterns[@]}"; do
+        local matches=$(grep -rn --include="*.go" -E "$pattern" "$project_dir" 2>/dev/null || true)
         if [[ -n "$matches" ]]; then
             echo "" | tee -a "$stub_log"
             echo "**FOUND**: Pattern '$pattern'" | tee -a "$stub_log"
